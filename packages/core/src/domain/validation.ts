@@ -16,12 +16,12 @@ import { createSliderValue01 } from './types.js';
 /**
  * Schema for ControlId (non-empty string).
  */
-export const controlIdSchema = z.string().min(1) as z.ZodType<ControlId>;
+export const controlIdSchema = z.string().min(1);
 
 /**
  * Schema for ModelId (non-empty string).
  */
-export const modelIdSchema = z.string().min(1) as z.ZodType<ModelId>;
+export const modelIdSchema = z.string().min(1);
 
 /**
  * Schema for SliderValue01 (number in [0, 1]).
@@ -30,7 +30,7 @@ export const sliderValue01Schema = z
   .number()
   .min(0)
   .max(1)
-  .transform((val) => createSliderValue01(val)) as z.ZodType<SliderValue01>;
+  .transform((val) => createSliderValue01(val));
 
 /**
  * Base schema for RadiobuttonDefinition (without refine).
