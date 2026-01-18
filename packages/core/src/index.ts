@@ -9,3 +9,8 @@
 export function hello(): string {
   return 'Hello from core';
 }
+
+/**
+ * Re-export all domain types, validation schemas, and utilities.
+ */
+export * from './domain/index.js';
