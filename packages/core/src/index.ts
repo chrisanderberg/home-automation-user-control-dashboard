@@ -14,3 +14,8 @@ export function hello(): string {
  * Re-export all domain types, validation schemas, and utilities.
  */
 export * from './domain/index.js';
+
+/**
+ * Re-export all time-of-week bucket indexing utilities.
+ */
+export * from './time/index.js';
