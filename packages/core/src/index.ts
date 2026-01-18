@@ -19,3 +19,8 @@ export * from './domain/index.js';
  * Re-export all time-of-week bucket indexing utilities.
  */
 export * from './time/index.js';
+
+/**
+ * Re-export all clock mapping utilities.
+ */
+export * from './clocks/index.js';

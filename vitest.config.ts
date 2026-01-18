@@ -12,4 +12,7 @@ export default defineConfig({
       '@core': resolve(__dirname, './packages/core/src'),
     },
   },
+  esbuild: {
+    target: 'node18',
+  },
 });
