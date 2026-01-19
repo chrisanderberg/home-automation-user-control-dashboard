@@ -78,9 +78,15 @@ describe('splitHoldInterval', () => {
   });
 
   it('should handle local clock with DST', () => {
-    // Test during DST transition
-    const t0 = new Date('2024-03-10T06:00:00Z').getTime(); // Spring forward day
-    const t1 = new Date('2024-03-10T08:00:00Z').getTime();
+    // Test during DST spring forward transition (March 10, 2024 in America/New_York)
+    // At 2:00 AM EST, clocks spring forward to 3:00 AM EDT, skipping the hour 2:00-3:00 AM
+    // UTC interval: 06:00:00Z to 08:00:00Z (2 hours = 7,200,000 ms)
+    // splitHoldInterval allocates real elapsed UTC milliseconds to buckets. During DST spring forward,
+    // the skipped hour (2:00-3:00 AM) has no corresponding local time buckets, but those milliseconds
+    // should still be allocated to the buckets that come after the transition. The total allocated time
+    // must equal t1 - t0 because we are counting real elapsed time, just distributed across different buckets.
+    const t0 = new Date('2024-03-10T06:00:00Z').getTime(); // 1:00 AM EST
+    const t1 = new Date('2024-03-10T08:00:00Z').getTime(); // 4:00 AM EDT
 
     const result = splitHoldInterval({
       t0Ms: t0,
@@ -92,8 +98,9 @@ describe('splitHoldInterval', () => {
     // Should not crash and should produce valid results
     expect(result.size).toBeGreaterThan(0);
     const totalMs = Array.from(result.values()).reduce((a, b) => a + b, 0);
-    // Total should be less than or equal to t1 - t0 (may be less due to DST skip)
-    expect(totalMs).toBeLessThanOrEqual(t1 - t0);
+    // All elapsed milliseconds from t0 to t1 must be allocated, just to different buckets.
+    // The skipped hour doesn't mean we lose time - those milliseconds are allocated to later buckets.
+    expect(totalMs).toBe(t1 - t0);
   });
 
   it('should omit undefined segments for solar clocks at poles', () => {
