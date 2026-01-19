@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+**/node_modules/
 .pnpm-store/
 
 # Build outputs
@@ -10,6 +11,7 @@ build/
 # Convex
 .convex/
 convex/_generated/
+**/_generated/
 
 # Environment
 .env
