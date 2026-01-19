@@ -22,6 +22,7 @@ import {
   discretizeSlider,
 } from '@home-automation/core';
 import type { SliderBoundaryPolicy } from '@home-automation/core';
+import { ingestCommittedEvent } from './measurement.js';
 
 /**
  * Slider boundary policy validator (matches schema.ts).
@@ -323,6 +324,12 @@ export const setControlValue = mutation({
       const toDiscreteState = newDiscreteState;
       const activeModelId = runtime.activeModelId;
 
+      // Capture previous runtime state for ingestion (before we update it)
+      const prevRuntime = {
+        lastCommittedAtMs: runtime.lastCommittedAtMs,
+        lastCommittedDiscreteState: runtime.lastCommittedDiscreteState,
+      };
+
       // Insert committed change event
       await ctx.db.insert('committedChangeEvents', {
         tsMs,
@@ -331,6 +338,20 @@ export const setControlValue = mutation({
         toDiscreteState,
         initiator: payload.initiator,
         activeModelId,
+      });
+
+      // Trigger analytics ingestion (Milestone 8)
+      // Process the committed event to update holdMs and transCounts
+      await ingestCommittedEvent(ctx, {
+        event: {
+          tsMs,
+          controlId: payload.controlId,
+          fromDiscreteState,
+          toDiscreteState,
+          initiator: payload.initiator,
+          activeModelId,
+        },
+        prevRuntime,
       });
     }
 
@@ -353,9 +374,6 @@ export const setControlValue = mutation({
 
     // Single patch call with all necessary properties
     await ctx.db.patch(runtime._id, patchData);
-
-    // TODO (Milestone 8): Trigger analytics ingestion hook here
-    // The committed event will be processed to update holdMs and transCounts
 
     return {
       success: true,
