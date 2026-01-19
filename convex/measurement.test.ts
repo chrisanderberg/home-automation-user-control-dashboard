@@ -301,4 +301,17 @@ export const expectedResults = {
     noPartialUpdates: true,
     errorsLogged: true,
   },
+  scenario6: {
+    intervalSplitCorrectly: true,
+    sumEqualsElapsedTime: true,
+  },
+  scenario7: {
+    weekWrapHandled: true,
+    sundayMondayAllocated: true,
+  },
+  scenario8: {
+    allFiveClocksProcessed: true,
+    holdMsForAllClocks: true,
+    transCountsForAllClocks: true,
+  },
 };
