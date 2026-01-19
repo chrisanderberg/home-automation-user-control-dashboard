@@ -24,3 +24,8 @@ export * from './time/index.js';
  * Re-export all clock mapping utilities.
  */
 export * from './clocks/index.js';
+
+/**
+ * Re-export all measurement utilities.
+ */
+export * from './measurement/splitHoldInterval/index.js';
