@@ -112,7 +112,7 @@ export default defineSchema({
   controlRuntime: defineTable({
     controlId: v.string(),
     kind: controlKindValidator,
-    activeModelId: v.string(), // ModelId - the active automation model
+    activeModelId: v.optional(v.string()), // ModelId - the active automation model (undefined when no model is active)
 
     // Current state (updated on every value change, committed or not)
     currentDiscreteState: v.number(), // Always present (required by MANUAL)
@@ -144,7 +144,7 @@ export default defineSchema({
     fromDiscreteState: v.number(), // Previous discrete state
     toDiscreteState: v.number(), // New discrete state
     initiator: initiatorValidator, // "user" or "model"
-    activeModelId: v.string(), // ModelId captured at commit time
+    activeModelId: v.optional(v.string()), // ModelId captured at commit time (undefined when no model is active)
   })
     .index('by_controlId', ['controlId'])
     .index('by_tsMs', ['tsMs'])
