@@ -317,25 +317,7 @@ function mergeNumericValues(target: any, source: any): void {
     return;
   }
 
-  if (typeof source === 'number') {
-    // This shouldn't happen at the top level, but handle it
-    if (target === undefined || target === null) {
-      return; // Will be set by caller
-    }
-    if (typeof target === 'number') {
-      return; // Already handled by caller
-    }
-  }
-
-  if (Array.isArray(source)) {
-    // Concatenate arrays
-    if (!Array.isArray(target)) {
-      return; // Type mismatch, will be handled by deep equality check
-    }
-    target.push(...source);
-    return;
-  }
-
+  // Assume source is an object
   if (typeof source === 'object' && !Array.isArray(source)) {
     // Ensure target is an object
     if (target === null || target === undefined || typeof target !== 'object' || Array.isArray(target)) {
@@ -352,11 +334,11 @@ function mergeNumericValues(target: any, source: any): void {
           // Sum numeric values (treat missing as 0)
           target[key] = (targetValue ?? 0) + sourceValue;
         } else if (Array.isArray(sourceValue)) {
-          // Concatenate arrays
+          // Always assign a new array, never mutate in-place
           if (!Array.isArray(targetValue)) {
             target[key] = [...sourceValue];
           } else {
-            target[key] = [...targetValue, ...sourceValue];
+            target[key] = [...sourceValue];
           }
         } else if (
           typeof sourceValue === 'object' &&
@@ -488,13 +470,6 @@ function deepEqual(a: any, b: any): boolean {
   }
 
   if (typeof a !== typeof b) {
-    // Type mismatch, but allow null/undefined to be treated as 0 for numbers
-    if ((a === null || a === undefined) && typeof b === 'number') {
-      return b === 0;
-    }
-    if ((b === null || b === undefined) && typeof a === 'number') {
-      return a === 0;
-    }
     return false;
   }
 
@@ -517,15 +492,15 @@ function deepEqual(a: any, b: any): boolean {
 
     // Collect all unique keys from both objects
     const allKeys = new Set([...Object.keys(a), ...Object.keys(b)]);
-    const keysA = Object.keys(a);
-    const keysB = Object.keys(b);
+    const keysA = new Set(Object.keys(a));
+    const keysB = new Set(Object.keys(b));
 
     // Check each key
     for (const key of allKeys) {
       const valueA = a[key];
       const valueB = b[key];
-      const hasA = keysA.includes(key);
-      const hasB = keysB.includes(key);
+      const hasA = keysA.has(key);
+      const hasB = keysB.has(key);
 
       if (!hasA && hasB) {
         // Key exists in b but not in a

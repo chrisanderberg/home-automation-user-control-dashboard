@@ -98,8 +98,8 @@ async function aggregateRawStats(
   };
 
   for (const row of filteredTransCounts) {
-    if (!row.clockId || !transCountsByClock[row.clockId]) {
-      continue; // Skip rows with invalid or unknown clock IDs
+    if (!transCountsByClock[row.clockId]) {
+      continue; // Skip unknown clock IDs
     }
     if (!transCountsByClock[row.clockId][row.bucketId]) {
       transCountsByClock[row.clockId][row.bucketId] = {};
