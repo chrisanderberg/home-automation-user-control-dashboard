@@ -79,9 +79,9 @@ export const setConfig = mutation({
     }
 
     // Validate markovDampingAlpha if provided
-    if (args.markovDampingAlpha !== undefined && args.markovDampingAlpha <= 0) {
+    if (args.markovDampingAlpha !== undefined && (args.markovDampingAlpha < 0 || args.markovDampingAlpha > 1)) {
       throw new Error(
-        `Invalid markovDampingAlpha: ${args.markovDampingAlpha} (must be positive)`
+        `Invalid markovDampingAlpha: ${args.markovDampingAlpha} (must be in [0, 1])`
       );
     }
 
@@ -140,7 +140,7 @@ export const createControl = mutation({
   args: v.object({
     controlId: v.string(),
     definition: v.any(), // Will validate with Zod schema
-    activeModelId: v.optional(v.string()), // Optional initial active model
+    activeModelId: v.string(), // Required initial active model (per MANUAL: "exactly one model is considered the active automation model")
   }),
   handler: async (ctx: MutationCtx, args: any) => {
     // Validate definition using Zod schema
@@ -175,7 +175,7 @@ export const createControl = mutation({
     const runtimeData: any = {
       controlId: args.controlId,
       kind: definition.kind,
-      activeModelId: args.activeModelId ?? undefined,
+      activeModelId: args.activeModelId, // Required per MANUAL
       currentDiscreteState: initialDiscreteState,
       lastUpdatedAtMs: nowMs,
       lastCommittedAtMs: nowMs, // Initial commit
