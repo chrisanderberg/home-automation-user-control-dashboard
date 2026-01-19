@@ -37,23 +37,22 @@ export type SetControlValueRequest =
 
 /**
  * Zod schema for SetControlValueRequest (discriminated union).
+ * This schema validates the request structure. The branded types (ControlId, SliderValue01)
+ * are used for compile-time type safety, but at runtime these are just strings/numbers.
  */
-export const setControlValueRequestSchema: z.ZodType<SetControlValueRequest> = z.discriminatedUnion(
-  'kind',
-  [
-    z.object({
-      controlId: controlIdSchema,
-      initiator: z.enum(['user', 'model']),
-      isCommitted: z.boolean(),
-      kind: z.literal('radiobutton'),
-      newState: z.number().int().min(0),
-    }),
-    z.object({
-      controlId: controlIdSchema,
-      initiator: z.enum(['user', 'model']),
-      isCommitted: z.boolean(),
-      kind: z.literal('slider'),
-      newValue01: sliderValue01Schema,
-    }),
-  ]
-);
+export const setControlValueRequestSchema = z.discriminatedUnion('kind', [
+  z.object({
+    controlId: controlIdSchema,
+    initiator: z.enum(['user', 'model']),
+    isCommitted: z.boolean(),
+    kind: z.literal('radiobutton'),
+    newState: z.number().int().min(0),
+  }),
+  z.object({
+    controlId: controlIdSchema,
+    initiator: z.enum(['user', 'model']),
+    isCommitted: z.boolean(),
+    kind: z.literal('slider'),
+    newValue01: sliderValue01Schema,
+  }),
+]);
