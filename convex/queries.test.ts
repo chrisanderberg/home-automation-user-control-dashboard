@@ -297,12 +297,268 @@ export function verifyResponseStructure(
     }
 
     // Check they are objects (not null/undefined)
-    if (typeof clockData.holdMs !== 'object' || typeof clockData.transCounts !== 'object') {
+    if (!clockData.holdMs || typeof clockData.holdMs !== 'object' || !clockData.transCounts || typeof clockData.transCounts !== 'object') {
       return false;
     }
   }
 
   return true;
+}
+
+/**
+ * Helper function to recursively merge numeric values by summing them.
+ * Used to combine per-model responses into an expected aggregate.
+ * 
+ * @param target - Target object to merge into (will be modified)
+ * @param source - Source object to merge from
+ */
+function mergeNumericValues(target: any, source: any): void {
+  if (source === null || source === undefined) {
+    return;
+  }
+
+  if (typeof source === 'number') {
+    // This shouldn't happen at the top level, but handle it
+    if (target === undefined || target === null) {
+      return; // Will be set by caller
+    }
+    if (typeof target === 'number') {
+      return; // Already handled by caller
+    }
+  }
+
+  if (Array.isArray(source)) {
+    // Concatenate arrays
+    if (!Array.isArray(target)) {
+      return; // Type mismatch, will be handled by deep equality check
+    }
+    target.push(...source);
+    return;
+  }
+
+  if (typeof source === 'object' && !Array.isArray(source)) {
+    // Ensure target is an object
+    if (target === null || target === undefined || typeof target !== 'object' || Array.isArray(target)) {
+      return; // Type mismatch, will be handled by deep equality check
+    }
+
+    // Recursively merge objects
+    for (const key in source) {
+      if (source.hasOwnProperty(key)) {
+        const sourceValue = source[key];
+        const targetValue = target[key];
+
+        if (typeof sourceValue === 'number') {
+          // Sum numeric values (treat missing as 0)
+          target[key] = (targetValue ?? 0) + sourceValue;
+        } else if (Array.isArray(sourceValue)) {
+          // Concatenate arrays
+          if (!Array.isArray(targetValue)) {
+            target[key] = [...sourceValue];
+          } else {
+            target[key] = [...targetValue, ...sourceValue];
+          }
+        } else if (
+          typeof sourceValue === 'object' &&
+          sourceValue !== null &&
+          !Array.isArray(sourceValue)
+        ) {
+          // Recursively merge nested objects
+          if (
+            typeof targetValue === 'object' &&
+            targetValue !== null &&
+            !Array.isArray(targetValue)
+          ) {
+            mergeNumericValues(targetValue, sourceValue);
+          } else {
+            // Target doesn't have this key or has wrong type, deep clone and set
+            target[key] = deepClone(sourceValue);
+          }
+        } else {
+          // For other types, just set (though we expect mostly numbers)
+          target[key] = sourceValue;
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Helper function to deep clone an object.
+ * 
+ * @param obj - Object to clone
+ * @returns Deep clone of the object
+ */
+function deepClone(obj: any): any {
+  if (obj === null || typeof obj !== 'object') {
+    return obj;
+  }
+
+  if (Array.isArray(obj)) {
+    return obj.map((item) => deepClone(item));
+  }
+
+  const cloned: any = {};
+  for (const key in obj) {
+    if (obj.hasOwnProperty(key)) {
+      cloned[key] = deepClone(obj[key]);
+    }
+  }
+  return cloned;
+}
+
+/**
+ * Helper function to normalize numeric values (treat missing as 0).
+ * Ensures consistent structure and converts null/undefined numeric fields to 0.
+ * 
+ * @param obj - Object to normalize
+ * @returns Normalized object
+ */
+function normalizeNumericFields(obj: any): any {
+  if (obj === null || obj === undefined) {
+    return {};
+  }
+
+  if (typeof obj === 'number') {
+    return obj;
+  }
+
+  if (Array.isArray(obj)) {
+    return obj.map((item) => normalizeNumericFields(item));
+  }
+
+  if (typeof obj === 'object' && !Array.isArray(obj)) {
+    const normalized: any = {};
+    for (const key in obj) {
+      if (obj.hasOwnProperty(key)) {
+        const value = obj[key];
+        if (typeof value === 'number') {
+          normalized[key] = value;
+        } else if (value === null || value === undefined) {
+          // Treat missing numeric fields as 0
+          normalized[key] = 0;
+        } else {
+          normalized[key] = normalizeNumericFields(value);
+        }
+      }
+    }
+    return normalized;
+  }
+
+  return obj;
+}
+
+/**
+ * Helper function to perform deep equality check between two objects.
+ * Treats missing numeric fields as 0.
+ * 
+ * @param a - First object
+ * @param b - Second object
+ * @returns true if objects are deeply equal
+ */
+function deepEqual(a: any, b: any): boolean {
+  if (a === b) {
+    return true;
+  }
+
+  if (a === null || b === null || a === undefined || b === undefined) {
+    // Treat null/undefined as equivalent to 0 for numeric contexts
+    // But only if the other value is a number
+    if (a === null || a === undefined) {
+      if (typeof b === 'number') {
+        return b === 0;
+      }
+      return a === b;
+    }
+    if (b === null || b === undefined) {
+      if (typeof a === 'number') {
+        return a === 0;
+      }
+      return a === b;
+    }
+    return a === b;
+  }
+
+  if (typeof a === 'number' && typeof b === 'number') {
+    // Handle NaN and floating point precision
+    if (isNaN(a) && isNaN(b)) {
+      return true;
+    }
+    return a === b;
+  }
+
+  if (typeof a !== typeof b) {
+    // Type mismatch, but allow null/undefined to be treated as 0 for numbers
+    if ((a === null || a === undefined) && typeof b === 'number') {
+      return b === 0;
+    }
+    if ((b === null || b === undefined) && typeof a === 'number') {
+      return a === 0;
+    }
+    return false;
+  }
+
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) {
+      return false;
+    }
+    for (let i = 0; i < a.length; i++) {
+      if (!deepEqual(a[i], b[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  if (typeof a === 'object' && !Array.isArray(a)) {
+    if (typeof b !== 'object' || Array.isArray(b)) {
+      return false;
+    }
+
+    // Collect all unique keys from both objects
+    const allKeys = new Set([...Object.keys(a), ...Object.keys(b)]);
+    const keysA = Object.keys(a);
+    const keysB = Object.keys(b);
+
+    // Check each key
+    for (const key of allKeys) {
+      const valueA = a[key];
+      const valueB = b[key];
+      const hasA = keysA.includes(key);
+      const hasB = keysB.includes(key);
+
+      if (!hasA && hasB) {
+        // Key exists in b but not in a
+        // If it's a number, treat missing as 0
+        if (typeof valueB === 'number') {
+          if (valueB !== 0) {
+            return false;
+          }
+        } else {
+          return false;
+        }
+      } else if (hasA && !hasB) {
+        // Key exists in a but not in b
+        // If it's a number, treat missing as 0
+        if (typeof valueA === 'number') {
+          if (valueA !== 0) {
+            return false;
+          }
+        } else {
+          return false;
+        }
+      } else {
+        // Key exists in both, compare recursively
+        if (!deepEqual(valueA, valueB)) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  }
+
+  return a === b;
 }
 
 /**
@@ -316,9 +572,65 @@ export function verifyAggregation(
   aggregatedResponse: any,
   perModelResponses: any[],
 ): boolean {
-  // This would need to be implemented based on actual response structure
-  // For now, this is a placeholder for the verification logic
-  return true;
+  if (!aggregatedResponse || !perModelResponses || perModelResponses.length === 0) {
+    return false;
+  }
+
+  // Start with a deep clone of the first per-model response
+  let expectedAggregate = deepClone(perModelResponses[0]);
+
+  // Merge remaining per-model responses
+  for (let i = 1; i < perModelResponses.length; i++) {
+    const perModelResponse = perModelResponses[i];
+    if (!perModelResponse) {
+      continue;
+    }
+
+    // Merge clocks from this per-model response into expected aggregate
+    if (perModelResponse.clocks && expectedAggregate.clocks) {
+      for (const clockId in perModelResponse.clocks) {
+        if (perModelResponse.clocks.hasOwnProperty(clockId)) {
+          const clockData = perModelResponse.clocks[clockId];
+          if (!expectedAggregate.clocks[clockId]) {
+            expectedAggregate.clocks[clockId] = deepClone(clockData);
+          } else {
+            // Merge holdMs
+            if (clockData.holdMs) {
+              if (!expectedAggregate.clocks[clockId].holdMs) {
+                expectedAggregate.clocks[clockId].holdMs = deepClone(clockData.holdMs);
+              } else {
+                mergeNumericValues(
+                  expectedAggregate.clocks[clockId].holdMs,
+                  clockData.holdMs,
+                );
+              }
+            }
+
+            // Merge transCounts
+            if (clockData.transCounts) {
+              if (!expectedAggregate.clocks[clockId].transCounts) {
+                expectedAggregate.clocks[clockId].transCounts = deepClone(
+                  clockData.transCounts,
+                );
+              } else {
+                mergeNumericValues(
+                  expectedAggregate.clocks[clockId].transCounts,
+                  clockData.transCounts,
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Normalize types (treat missing numeric fields as 0)
+  const normalizedExpected = normalizeNumericFields(expectedAggregate);
+  const normalizedActual = normalizeNumericFields(aggregatedResponse);
+
+  // Perform deep equality check
+  return deepEqual(normalizedExpected, normalizedActual);
 }
 
 /**
