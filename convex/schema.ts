@@ -147,7 +147,8 @@ export default defineSchema({
     activeModelId: v.string(), // ModelId captured at commit time
   })
     .index('by_controlId', ['controlId'])
-    .index('by_tsMs', ['tsMs']),
+    .index('by_tsMs', ['tsMs'])
+    .index('by_controlId_tsMs', ['controlId', 'tsMs']),
 
   /**
    * Holding time measurement aggregates.
@@ -164,6 +165,13 @@ export default defineSchema({
    * 
    * Value:
    * - ms: accumulated milliseconds in this (control, model, clock, bucket, state) combination
+   * 
+   * Index optimization:
+   * - by_controlId: single-column index for queries scoped to a control
+   * - by_control_model_clock_bucket_state: composite index for exact lookups and multi-dimension queries
+   * - Single-column indexes on modelId, clockId, bucketId, or state are not needed as queries
+   *   always start with controlId and the composite index supports all query patterns.
+   * - Before deploying, ensure tests/query logs validate no removed indexes are required.
    */
   holdMs: defineTable({
     controlId: v.string(),
@@ -174,10 +182,6 @@ export default defineSchema({
     ms: v.number(), // Accumulated milliseconds
   })
     .index('by_controlId', ['controlId'])
-    .index('by_modelId', ['modelId'])
-    .index('by_clockId', ['clockId'])
-    .index('by_bucketId', ['bucketId'])
-    .index('by_state', ['state'])
     .index('by_control_model_clock_bucket_state', [
       'controlId',
       'modelId',
@@ -219,8 +223,6 @@ export default defineSchema({
     .index('by_modelId', ['modelId'])
     .index('by_clockId', ['clockId'])
     .index('by_bucketId', ['bucketId'])
-    .index('by_fromState', ['fromState'])
-    .index('by_toState', ['toState'])
     .index('by_control_model_clock_bucket_from_to', [
       'controlId',
       'modelId',
