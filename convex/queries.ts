@@ -75,13 +75,15 @@ async function aggregateRawStats(
   };
 
   for (const row of filteredHoldMs) {
-    if (!holdMsByClock[row.clockId]) {
+    const clockId = row.clockId as ClockId;
+    const bucketId = row.bucketId as number;
+    if (!holdMsByClock[clockId]) {
       continue; // Skip unknown clock IDs
     }
-    if (!holdMsByClock[row.clockId][row.bucketId]) {
-      holdMsByClock[row.clockId][row.bucketId] = {};
+    if (!holdMsByClock[clockId][bucketId]) {
+      holdMsByClock[clockId][bucketId] = {};
     }
-    const bucket = holdMsByClock[row.clockId][row.bucketId];
+    const bucket = holdMsByClock[clockId][bucketId];
     bucket[row.state] = (bucket[row.state] || 0) + row.ms;
   }
 
@@ -98,13 +100,15 @@ async function aggregateRawStats(
   };
 
   for (const row of filteredTransCounts) {
-    if (!transCountsByClock[row.clockId]) {
+    const clockId = row.clockId as ClockId;
+    const bucketId = row.bucketId as number;
+    if (!transCountsByClock[clockId]) {
       continue; // Skip unknown clock IDs
     }
-    if (!transCountsByClock[row.clockId][row.bucketId]) {
-      transCountsByClock[row.clockId][row.bucketId] = {};
+    if (!transCountsByClock[clockId][bucketId]) {
+      transCountsByClock[clockId][bucketId] = {};
     }
-    const bucket = transCountsByClock[row.clockId][row.bucketId];
+    const bucket = transCountsByClock[clockId][bucketId];
     const transitionKey = `${row.fromState}-${row.toState}`;
     bucket[transitionKey] = (bucket[transitionKey] || 0) + row.count;
   }
