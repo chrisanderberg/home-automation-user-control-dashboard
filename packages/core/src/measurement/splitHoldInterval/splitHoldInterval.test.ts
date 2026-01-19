@@ -140,7 +140,9 @@ describe('splitHoldInterval', () => {
     // Should allocate time correctly despite variable bucket lengths
     expect(result.size).toBeGreaterThan(0);
     const totalMs = Array.from(result.values()).reduce((a, b) => a + b, 0);
-    expect(totalMs).toBeLessThanOrEqual(t1 - t0); // May be less if part is undefined
+    // At mid-day, unequalHours is fully defined (within the day period between sunrise and sunset),
+    // so we expect exact allocation of all elapsed time
+    expect(totalMs).toBe(t1 - t0);
   });
 
   it('should return empty map for invalid interval (t0 >= t1)', () => {
