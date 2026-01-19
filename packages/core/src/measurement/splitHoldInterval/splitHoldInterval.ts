@@ -46,15 +46,7 @@ function findUniformBucketEnd(
     const testBucket = mapTimestampToBucket(clockId, testTime, config);
 
     if (testBucket === undefined) {
-      // Entered undefined region - refine to find last defined timestamp
-      return refineToLastDefinedTimestamp(
-        searchTime,
-        testTime,
-        currentBucket,
-        clockId,
-        config,
-        maxTime,
-      );
+      return undefined; // Entered undefined region
     }
 
     if (testBucket !== currentBucket) {
@@ -105,73 +97,6 @@ function refineBucketBoundary(
 }
 
 /**
- * Finds the last timestamp that still maps to currentBucket before entering
- * an undefined region. Uses binary search between defined and undefined timestamps.
- */
-function refineToLastDefinedTimestamp(
-  definedMs: number,
-  undefinedMs: number,
-  currentBucket: number,
-  clockId: ClockId,
-  config: ClockConfig,
-  maxTime: number,
-): number {
-  // Binary search to find the last timestamp that still maps to currentBucket
-  // We know definedMs maps to currentBucket, and undefinedMs maps to undefined
-  let lowMs = definedMs;
-  let highMs = undefinedMs;
-
-  while (highMs - lowMs > 1) {
-    const midMs = Math.floor((lowMs + highMs) / 2);
-    const midBucket = mapTimestampToBucket(clockId, midMs, config);
-
-    if (midBucket === undefined || midBucket !== currentBucket) {
-      // midMs is undefined or different bucket, search left
-      highMs = midMs;
-    } else {
-      // midMs still maps to currentBucket, search right
-      lowMs = midMs;
-    }
-  }
-
-  // Return the last timestamp that maps to currentBucket
-  return Math.min(lowMs, maxTime);
-}
-
-/**
- * Searches forward from startTime to find the next timestamp where the clock
- * mapping is defined. Uses a configurable step size and respects a 24-hour
- * safety limit to avoid infinite loops.
- *
- * @param clockId - Clock type
- * @param startTime - Starting timestamp to search from
- * @param maxTime - Maximum timestamp to search to (t1Ms)
- * @param stepMillis - Step size in milliseconds (e.g., 60000 for 1-minute steps, 1000 for 1-second steps)
- * @param config - Clock configuration
- * @returns The next defined timestamp, or undefined if none found within the search limits
- */
-function findNextDefinedTimestamp(
-  clockId: ClockId,
-  startTime: number,
-  maxTime: number,
-  stepMillis: number,
-  config: ClockConfig,
-): number | undefined {
-  let searchTime = startTime;
-  const maxSkip = 24 * 3600000; // Maximum 24 hours to avoid infinite loops
-
-  while (searchTime < maxTime && searchTime < startTime + maxSkip) {
-    searchTime += stepMillis;
-    const testBucket = mapTimestampToBucket(clockId, searchTime, config);
-    if (testBucket !== undefined) {
-      return searchTime;
-    }
-  }
-
-  return undefined;
-}
-
-/**
  * Splits a holding interval [t0, t1) into per-bucket elapsed milliseconds.
  *
  * For each clock independently, this function:
@@ -202,20 +127,26 @@ export function splitHoldInterval(
     if (bucket === undefined) {
       // Clock is undefined at this time - skip forward
       // Try to find next defined time by stepping forward
-      const nextDefinedTime = findNextDefinedTimestamp(
-        clockId,
-        currentTime,
-        t1Ms,
-        60000, // Search in 1-minute steps
-        config,
-      );
+      let foundDefined = false;
+      let searchTime = currentTime;
+      const maxSearch = t1Ms;
+      const searchStep = 60000; // Search in 1-minute steps
 
-      if (nextDefinedTime === undefined) {
+      while (searchTime < maxSearch && searchTime < currentTime + 24 * 3600000) {
+        // Limit search to 24 hours to avoid infinite loops
+        searchTime += searchStep;
+        const testBucket = mapTimestampToBucket(clockId, searchTime, config);
+        if (testBucket !== undefined) {
+          currentTime = searchTime;
+          foundDefined = true;
+          break;
+        }
+      }
+
+      if (!foundDefined) {
         // No defined time found in remaining interval
         break;
       }
-
-      currentTime = nextDefinedTime;
       continue;
     }
 
@@ -246,32 +177,26 @@ export function splitHoldInterval(
     if (bucketEndTime === undefined) {
       // Entered undefined region - use finer-grained stepping to avoid skipping
       // short defined intervals
+      const fineStep = 1000; // 1 second steps
+      const maxSkip = 24 * 3600000; // Maximum 24 hours to avoid infinite loops
       let foundDefined = false;
-      let lastSearchedTime = currentTime;
+      let searchTime = currentTime;
+      const startSearchTime = currentTime;
 
       // Advance in small increments, re-checking bucket end at each step
-      while (true) {
-        const searchTime = findNextDefinedTimestamp(
-          clockId,
-          lastSearchedTime,
-          t1Ms,
-          1000, // 1 second steps
-          config,
-        );
-
-        if (searchTime === undefined) {
-          // No defined time found in remaining interval
-          break;
-        }
-
-        // Found a defined bucket - re-check bucket end from this position
+      while (
+        searchTime < t1Ms &&
+        searchTime < startSearchTime + maxSkip
+      ) {
+        searchTime += fineStep;
         const testBucket = mapTimestampToBucket(clockId, searchTime, config);
+
         if (testBucket === undefined) {
-          // Should not happen, but continue searching from this point
-          lastSearchedTime = searchTime;
+          // Still in undefined region, continue searching
           continue;
         }
 
+        // Found a defined bucket - re-check bucket end from this position
         let testBucketEndTime: number | undefined;
 
         if (clockId === 'unequalHours') {
@@ -298,8 +223,7 @@ export function splitHoldInterval(
           foundDefined = true;
           break;
         }
-        // bucketEndTime still undefined, continue searching from this point
-        lastSearchedTime = searchTime;
+        // bucketEndTime still undefined, continue searching
       }
 
       if (!foundDefined) {
@@ -359,15 +283,7 @@ function findUnequalHoursBucketEnd(
     const testBucket = mapTimestampToBucket(clockId, testTime, config);
 
     if (testBucket === undefined) {
-      // Entered undefined region - refine to find last defined timestamp
-      return refineToLastDefinedTimestamp(
-        searchTime,
-        testTime,
-        currentBucket,
-        clockId,
-        config,
-        maxTime,
-      );
+      return undefined; // Entered undefined region
     }
 
     if (testBucket !== currentBucket) {
