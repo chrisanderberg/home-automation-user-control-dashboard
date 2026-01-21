@@ -1,9 +1,8 @@
 /**
  * Wrapper for suncalc to handle CommonJS import in ESM environment.
+ * Uses ESM import syntax that works with modern bundlers (including Convex's esbuild).
  */
-import { createRequire } from 'module';
-
-const require = createRequire(import.meta.url);
-const suncalc = require('suncalc');
+// @ts-ignore - suncalc is CommonJS but bundlers can handle this
+import suncalc from 'suncalc';
 
 export const getTimes = suncalc.getTimes.bind(suncalc);

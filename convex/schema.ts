@@ -59,15 +59,15 @@ export default defineSchema({
     longitude: v.number(), // Degrees, range [-180, 180]
 
     // KDE (Kernel Density Estimation) parameters
-    kdeBandwidth: v.number(), // Configurable bandwidth h (TBD default)
+    kdeBandwidth: v.optional(v.number()), // Configurable bandwidth h (TBD default)
     kdeKernel: v.optional(v.string()), // Optional kernel type (e.g., "gaussian")
 
     // Slider discretization boundary policy
-    sliderBoundaryPolicy: sliderBoundaryPolicyValidator,
+    sliderBoundaryPolicy: v.optional(sliderBoundaryPolicyValidator),
 
     // Markov/CTMC stationary distribution stability parameters
-    markovDampingAlpha: v.number(), // Damping factor α in [0, 1] (configurable, TBD default)
-    markovTeleportPrior: v.string(), // Teleportation prior (e.g., "uniform" or explicit vector representation)
+    markovDampingAlpha: v.optional(v.number()), // Damping factor α in [0, 1] (configurable, TBD default)
+    markovTeleportPrior: v.optional(v.string()), // Teleportation prior (e.g., "uniform" or explicit vector representation)
 
     // CTMC estimator configuration (placeholder for Milestone 11)
     ctmcEstimatorConfig: v.optional(v.any()),

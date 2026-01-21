@@ -8,7 +8,7 @@
 import { mutation } from './_generated/server.js';
 import { v } from 'convex/values';
 import type { GenericMutationCtx } from 'convex/server';
-import type { DataModel } from './_generated/dataModel.js';
+import type { DataModel, Doc } from './_generated/dataModel.js';
 
 type MutationCtx = GenericMutationCtx<DataModel>;
 import type {
@@ -91,7 +91,11 @@ export const setConfig = mutation({
       .query('config')
       .first();
 
-    const configData = {
+    // Build config data object with only defined fields
+    // All fields except timezone, latitude, longitude are optional in schema
+    // Use Partial to allow omitting optional fields, then intersect with required fields
+    const configData: Pick<Doc<'config'>, 'timezone' | 'latitude' | 'longitude'> &
+      Partial<Omit<Doc<'config'>, 'timezone' | 'latitude' | 'longitude' | '_id' | '_creationTime'>> = {
       timezone: args.timezone,
       latitude: args.latitude,
       longitude: args.longitude,

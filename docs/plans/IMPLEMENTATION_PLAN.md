@@ -66,6 +66,16 @@ Authoritative spec: `docs/context/MANUAL.md`
 - Schema validation: Zod (where needed)
 - Styling/UI: Tailwind + shadcn/ui optional (later)
 
+### Architectural constraints for shared code (`packages/core/`)
+**CRITICAL**: Code in `packages/core/` must be environment-agnostic and cannot use runtime-specific APIs.
+
+- **No Node.js-specific APIs**: Do not use Node.js built-in modules (e.g., `module`, `fs`, `path`, `createRequire`, etc.) in `packages/core/`. This code must run in both Convex (restricted environment) and browser/Vite contexts.
+- **Use standard ESM imports**: For CommonJS dependencies, use standard ESM `import` syntax. Modern bundlers (Convex's esbuild, Vite) handle CommonJS-to-ESM conversion automatically.
+- **No framework dependencies**: `packages/core/` should have no framework-specific dependencies (no React, no Convex, no Vite, etc.). It is pure TypeScript logic.
+- **Browser-compatible only**: All code in `packages/core/` must be compatible with browser runtime environments.
+
+**Rationale**: The shared core package is used by both the Convex backend and the TanStack Start frontend. Node.js-specific APIs will fail in Convex's restricted environment and in browser runtimes. Use standard JavaScript/TypeScript features that work across all target environments.
+
 ### Key policy choices fixed by this project (not TBD)
 - “User-initiated” is provided explicitly by clients on each change:
   - `initiator: "user" | "model"`
