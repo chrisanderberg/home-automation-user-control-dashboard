@@ -197,9 +197,13 @@ export default defineSchema({
    * 
    * Chunks are ordered by chunkIndex and must be assembled to reconstruct the full array.
    * 
+   * The batchId field enables safe atomic swaps: new chunks are inserted with a new batchId,
+   * verified, and only then are old chunks (with different batchId) deleted.
+   * 
    * @param controlId - Control identifier (matches analyticsBlobs)
    * @param modelId - Model identifier (matches analyticsBlobs)
    * @param windowId - Window identifier (matches analyticsBlobs)
+   * @param batchId - Unique batch identifier for atomic swap operations
    * @param chunkIndex - Zero-based index of this chunk (0, 1, 2, ...)
    * @param data - Array chunk containing a portion of the full dense array
    */
@@ -207,9 +211,11 @@ export default defineSchema({
     controlId: v.string(),
     modelId: v.string(), // ModelId
     windowId: v.string(), // Seasonal window identifier (default: "default")
+    batchId: v.string(), // Unique batch identifier for atomic swap operations
     chunkIndex: v.number(), // Zero-based chunk index
     data: v.array(v.number()), // Chunk of the dense array
   })
     .index('by_control_model_window', ['controlId', 'modelId', 'windowId'])
+    .index('by_control_model_window_batch', ['controlId', 'modelId', 'windowId', 'batchId'])
     .index('by_control_model_window_chunk', ['controlId', 'modelId', 'windowId', 'chunkIndex']),
 });

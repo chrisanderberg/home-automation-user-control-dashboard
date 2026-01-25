@@ -98,6 +98,9 @@ function assembleFromChunks(chunks: number[][]): number[] {
 /**
  * Loads chunks for a blob from the database.
  * 
+ * Filters by the latest batchId to ensure we only get the current valid chunks,
+ * avoiding stale data during atomic swap operations.
+ * 
  * @param ctx - Query context
  * @param controlId - Control identifier
  * @param modelId - Model identifier
@@ -110,7 +113,8 @@ async function loadChunks(
   modelId: string,
   windowId: string,
 ): Promise<number[][] | null> {
-  const chunks = await ctx.db
+  // Get all chunks for this (control, model, window)
+  const allChunks = await ctx.db
     .query('analyticsBlobChunks')
     .withIndex('by_control_model_window', (q: any) =>
       q
@@ -120,9 +124,21 @@ async function loadChunks(
     )
     .collect();
 
-  if (chunks.length === 0) {
+  if (allChunks.length === 0) {
     return null;
   }
+
+  // Find the latest batchId (most recent batch)
+  // batchId format: "timestamp-random", so extract timestamp for comparison
+  const batchIds = new Set(allChunks.map((chunk) => chunk.batchId));
+  const latestBatchId = Array.from(batchIds).reduce((latest, current) => {
+    const currentTs = parseInt(current.split('-')[0], 10);
+    const latestTs = parseInt(latest.split('-')[0], 10);
+    return currentTs > latestTs ? current : latest;
+  });
+
+  // Filter to only chunks with the latest batchId
+  const chunks = allChunks.filter((chunk) => chunk.batchId === latestBatchId);
 
   // Sort by chunkIndex to ensure correct order
   chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);

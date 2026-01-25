@@ -314,6 +314,9 @@ function assembleFromChunks(chunks: number[][]): number[] {
 /**
  * Loads chunks for a blob from the database.
  * 
+ * Filters by the latest batchId to ensure we only get the current valid chunks,
+ * avoiding stale data during atomic swap operations.
+ * 
  * @param ctx - Convex mutation context
  * @param controlId - Control identifier
  * @param modelId - Model identifier
@@ -326,7 +329,8 @@ async function loadChunks(
   modelId: string,
   windowId: string,
 ): Promise<number[][] | null> {
-  const chunks = await ctx.db
+  // Get all chunks for this (control, model, window)
+  const allChunks = await ctx.db
     .query('analyticsBlobChunks')
     .withIndex('by_control_model_window', (q: any) =>
       q
@@ -336,9 +340,21 @@ async function loadChunks(
     )
     .collect();
 
-  if (chunks.length === 0) {
+  if (allChunks.length === 0) {
     return null;
   }
+
+  // Find the latest batchId (most recent batch)
+  // batchId format: "timestamp-random", so extract timestamp for comparison
+  const batchIds = new Set(allChunks.map((chunk) => chunk.batchId));
+  const latestBatchId = Array.from(batchIds).reduce((latest, current) => {
+    const currentTs = parseInt(current.split('-')[0], 10);
+    const latestTs = parseInt(latest.split('-')[0], 10);
+    return currentTs > latestTs ? current : latest;
+  });
+
+  // Filter to only chunks with the latest batchId
+  const chunks = allChunks.filter((chunk) => chunk.batchId === latestBatchId);
 
   // Sort by chunkIndex to ensure correct order
   chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
@@ -346,7 +362,11 @@ async function loadChunks(
 }
 
 /**
- * Saves chunks to the database, replacing any existing chunks.
+ * Saves chunks to the database, replacing any existing chunks using a safe atomic swap.
+ * 
+ * Uses a batchId to ensure atomicity: inserts all new chunks with a new batchId,
+ * verifies insertion succeeded, then deletes old chunks with different batchId.
+ * This prevents partial state if the mutation fails mid-insert.
  * 
  * @param ctx - Convex mutation context
  * @param controlId - Control identifier
@@ -361,7 +381,40 @@ async function saveChunks(
   windowId: string,
   chunks: number[][],
 ): Promise<void> {
-  // Delete existing chunks
+  // Generate unique batchId for this save operation
+  const batchId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+  // Insert all new chunks with the same batchId
+  for (let i = 0; i < chunks.length; i++) {
+    await ctx.db.insert('analyticsBlobChunks', {
+      controlId,
+      modelId,
+      windowId,
+      batchId,
+      chunkIndex: i,
+      data: chunks[i],
+    });
+  }
+
+  // Verify the number of inserted chunks matches expected count
+  const insertedChunks = await ctx.db
+    .query('analyticsBlobChunks')
+    .withIndex('by_control_model_window_batch', (q: any) =>
+      q
+        .eq('controlId', controlId)
+        .eq('modelId', modelId)
+        .eq('windowId', windowId)
+        .eq('batchId', batchId),
+    )
+    .collect();
+
+  if (insertedChunks.length !== chunks.length) {
+    throw new Error(
+      `Failed to insert all chunks: expected ${chunks.length}, got ${insertedChunks.length}`,
+    );
+  }
+
+  // Only after successful insertion, delete old chunks that don't match the new batchId
   const existingChunks = await ctx.db
     .query('analyticsBlobChunks')
     .withIndex('by_control_model_window', (q: any) =>
@@ -373,18 +426,9 @@ async function saveChunks(
     .collect();
 
   for (const chunk of existingChunks) {
-    await ctx.db.delete(chunk._id);
-  }
-
-  // Insert new chunks
-  for (let i = 0; i < chunks.length; i++) {
-    await ctx.db.insert('analyticsBlobChunks', {
-      controlId,
-      modelId,
-      windowId,
-      chunkIndex: i,
-      data: chunks[i],
-    });
+    if (chunk.batchId !== batchId) {
+      await ctx.db.delete(chunk._id);
+    }
   }
 }
 
