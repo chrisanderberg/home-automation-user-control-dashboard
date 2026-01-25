@@ -1,13 +1,15 @@
 /**
  * Measurement ingestion for committed change events.
  * 
- * This module implements Milestone 8: Measurement Ingestion - Update holdMs and transCounts
+ * This module implements Milestone 8: Measurement Ingestion - Update dense analytics arrays
  * on Committed Events.
  * 
  * Processes committed change events to:
  * - Close holding intervals and split time across buckets per clock
- * - Record user-initiated transitions in transCounts
+ * - Record user-initiated transitions in dense arrays
  * - Attribute all counts to the activeModelId captured at commit time
+ * 
+ * Uses dense numerical arrays per MANUAL.md specification instead of sparse maps.
  */
 
 import type { GenericMutationCtx } from 'convex/server';
@@ -17,6 +19,12 @@ import {
   mapTimestampToBucket,
   type ClockId,
   type ClockConfig,
+  type ControlDefinition,
+  holdIndex,
+  transIndex,
+  createDenseArray,
+  validateArraySize,
+  type ClockIndex,
 } from '@home-automation/core';
 
 type MutationCtx = GenericMutationCtx<DataModel>;
@@ -25,12 +33,44 @@ type MutationCtx = GenericMutationCtx<DataModel>;
  * All five clock identifiers that must be processed.
  */
 const ALL_CLOCKS: ClockId[] = [
-  'local',
   'utc',
+  'local',
   'meanSolar',
   'apparentSolar',
   'unequalHours',
 ];
+
+/**
+ * Map clock ID to clock index (canonical ordering from MANUAL.md).
+ */
+function getClockIndex(clockId: ClockId): ClockIndex {
+  switch (clockId) {
+    case 'utc':
+      return 0;
+    case 'local':
+      return 1;
+    case 'meanSolar':
+      return 2;
+    case 'apparentSolar':
+      return 3;
+    case 'unequalHours':
+      return 4;
+    default:
+      throw new Error(`Unknown clock ID: ${clockId}`);
+  }
+}
+
+/**
+ * Get number of states from a control definition.
+ */
+function getNumStates(definition: ControlDefinition): number {
+  if (definition.kind === 'radiobutton') {
+    return definition.numStates;
+  } else {
+    // Slider always has 6 states
+    return 6;
+  }
+}
 
 /**
  * Parameters for ingesting a committed event.
@@ -53,13 +93,14 @@ interface IngestionParams {
 }
 
 /**
- * Ingests a committed change event to update holdMs and transCounts aggregates.
+ * Ingests a committed change event to update dense analytics arrays.
  * 
  * This function:
  * 1. Validates data integrity (discards on failure per MANUAL)
- * 2. Closes the previous holding interval [prevCommittedAtMs, currentCommittedTsMs)
- * 3. Splits holding time across all 5 clocks using splitHoldInterval
- * 4. Records user-initiated transitions (if initiator === "user")
+ * 2. Loads or creates the analytics blob for (control, model, window)
+ * 3. Closes the previous holding interval [prevCommittedAtMs, currentCommittedTsMs)
+ * 4. Splits holding time across all 5 clocks and updates dense array
+ * 5. Records user-initiated transitions (if initiator === "user")
  * 
  * All counts are attributed to the activeModelId captured at commit time.
  * 
@@ -83,10 +124,22 @@ export async function ingestCommittedEvent(
       return; // Discard - no config means we can't map clocks
     }
 
-    // 2. Validate integrity checks
-    if (
-      !validateIntegrity(event, prevRuntime)
-    ) {
+    // 2. Load control definition to get numStates
+    const control = await ctx.db
+      .query('controls')
+      .withIndex('by_controlId', (q: any) => q.eq('controlId', event.controlId))
+      .first();
+    if (!control) {
+      console.error(
+        `[ingestCommittedEvent] Control not found for controlId: ${event.controlId}`,
+      );
+      return; // Discard
+    }
+    const definition = control.definition as ControlDefinition;
+    const numStates = getNumStates(definition);
+
+    // 3. Validate integrity checks
+    if (!validateIntegrity(event, prevRuntime)) {
       console.error(
         `[ingestCommittedEvent] Integrity check failed. Discarding event for controlId: ${event.controlId}`,
       );
@@ -100,14 +153,25 @@ export async function ingestCommittedEvent(
       longitude: config.longitude,
     };
 
-    // 3. Close holding interval and split across clocks
+    // 4. Load or create analytics blob
+    const windowId = 'default'; // Seasonal windows deferred
+    const blob = await loadOrCreateBlob(
+      ctx,
+      event.controlId,
+      event.activeModelId,
+      windowId,
+      numStates,
+    );
+
+    // 5. Close holding interval and split across clocks
     const t0Ms = prevRuntime.lastCommittedAtMs;
     const t1Ms = event.tsMs;
     const state = prevRuntime.lastCommittedDiscreteState;
-    const modelId = event.activeModelId;
 
     // Process all clocks
     for (const clockId of ALL_CLOCKS) {
+      const clockIndex = getClockIndex(clockId);
+
       // Split holding interval for this clock
       const bucketAllocations = splitHoldInterval({
         t0Ms,
@@ -116,22 +180,17 @@ export async function ingestCommittedEvent(
         config: clockConfig,
       });
 
-      // Upsert holdMs for each bucket
+      // Update holding times in dense array
       for (const [bucketId, ms] of bucketAllocations.entries()) {
-        await upsertHoldMs(ctx, {
-          controlId: event.controlId,
-          modelId,
-          clockId,
-          bucketId,
-          state,
-          ms,
-        });
+        const index = holdIndex(state, clockIndex, bucketId);
+        blob.data[index] = (blob.data[index] || 0) + ms;
       }
     }
 
-    // 4. Record user transitions (only if initiator === "user")
+    // 6. Record user transitions (only if initiator === "user")
     if (event.initiator === 'user') {
       for (const clockId of ALL_CLOCKS) {
+        const clockIndex = getClockIndex(clockId);
         const bucketId = mapTimestampToBucket(
           clockId,
           event.tsMs,
@@ -140,17 +199,20 @@ export async function ingestCommittedEvent(
 
         // Only record if bucket is defined (not undefined)
         if (bucketId !== undefined) {
-          await upsertTransCounts(ctx, {
-            controlId: event.controlId,
-            modelId,
-            clockId,
+          const index = transIndex(
+            event.fromDiscreteState,
+            event.toDiscreteState,
+            clockIndex,
             bucketId,
-            fromState: event.fromDiscreteState,
-            toState: event.toDiscreteState,
-          });
+            numStates,
+          );
+          blob.data[index] = (blob.data[index] || 0) + 1;
         }
       }
     }
+
+    // 7. Save updated blob
+    await ctx.db.patch(blob._id, { data: blob.data });
   } catch (error) {
     // Log error but don't fail the mutation
     console.error(
@@ -204,93 +266,59 @@ function validateIntegrity(
 }
 
 /**
- * Upserts a holdMs row, incrementing existing ms or inserting new row.
+ * Loads or creates an analytics blob for the given (control, model, window).
+ * 
+ * @param ctx - Convex mutation context
+ * @param controlId - Control identifier
+ * @param modelId - Model identifier
+ * @param windowId - Window identifier (default: "default")
+ * @param numStates - Number of discrete states (N)
+ * @returns Analytics blob with dense array
  */
-async function upsertHoldMs(
+async function loadOrCreateBlob(
   ctx: MutationCtx,
-  params: {
-    controlId: string;
-    modelId: string;
-    clockId: ClockId;
-    bucketId: number;
-    state: number;
-    ms: number;
-  },
-): Promise<void> {
-  const { controlId, modelId, clockId, bucketId, state, ms } = params;
-
-  // Query existing row using composite index
+  controlId: string,
+  modelId: string,
+  windowId: string,
+  numStates: number,
+): Promise<{
+  _id: any;
+  data: number[];
+}> {
+  // Query for existing blob
   const existing = await ctx.db
-    .query('holdMs')
-    .withIndex('by_control_model_clock_bucket_state', (q) =>
+    .query('analyticsBlobs')
+    .withIndex('by_control_model_window', (q: any) =>
       q
         .eq('controlId', controlId)
         .eq('modelId', modelId)
-        .eq('clockId', clockId)
-        .eq('bucketId', bucketId)
-        .eq('state', state),
+        .eq('windowId', windowId),
     )
     .first();
 
   if (existing) {
-    // Update existing row
-    await ctx.db.patch(existing._id, { ms: existing.ms + ms });
+    // Validate array size matches expected
+    if (!validateArraySize(existing.data, numStates)) {
+      console.error(
+        `[loadOrCreateBlob] Array size mismatch for controlId: ${controlId}, modelId: ${modelId}. Expected size for ${numStates} states, got ${existing.data.length}`,
+      );
+      // Create new array with correct size (data migration scenario)
+      const newData = createDenseArray(numStates);
+      await ctx.db.patch(existing._id, { data: newData, numStates, version: 1 });
+      return { _id: existing._id, data: newData };
+    }
+    return { _id: existing._id, data: existing.data };
   } else {
-    // Insert new row
-    await ctx.db.insert('holdMs', {
+    // Create new blob initialized to zeros
+    const data = createDenseArray(numStates);
+    const newBlob = await ctx.db.insert('analyticsBlobs', {
       controlId,
       modelId,
-      clockId,
-      bucketId,
-      state,
-      ms,
+      windowId,
+      numStates,
+      data,
+      version: 1,
     });
-  }
-}
-
-/**
- * Upserts a transCounts row, incrementing existing count or inserting new row.
- */
-async function upsertTransCounts(
-  ctx: MutationCtx,
-  params: {
-    controlId: string;
-    modelId: string;
-    clockId: ClockId;
-    bucketId: number;
-    fromState: number;
-    toState: number;
-  },
-): Promise<void> {
-  const { controlId, modelId, clockId, bucketId, fromState, toState } = params;
-
-  // Query existing row using composite index
-  const existing = await ctx.db
-    .query('transCounts')
-    .withIndex('by_control_model_clock_bucket_from_to', (q) =>
-      q
-        .eq('controlId', controlId)
-        .eq('modelId', modelId)
-        .eq('clockId', clockId)
-        .eq('bucketId', bucketId)
-        .eq('fromState', fromState)
-        .eq('toState', toState),
-    )
-    .first();
-
-  if (existing) {
-    // Update existing row
-    await ctx.db.patch(existing._id, { count: existing.count + 1 });
-  } else {
-    // Insert new row with count = 1
-    await ctx.db.insert('transCounts', {
-      controlId,
-      modelId,
-      clockId,
-      bucketId,
-      fromState,
-      toState,
-      count: 1,
-    });
+    return { _id: newBlob, data };
   }
 }

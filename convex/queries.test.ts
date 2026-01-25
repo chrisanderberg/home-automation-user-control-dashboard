@@ -48,17 +48,18 @@ export const testScenario1_BasicQueries = {
  * Setup:
  * 1. Create config and control
  * 2. Set active model
- * 3. Create committed events that populate holdMs and transCounts
+ * 3. Create committed events that populate dense analytics arrays
  * 
  * Action:
  * 4. Query getRawStats({ controlId })
  * 
  * Verify:
- * - Response includes all 5 clocks as keys: local, utc, meanSolar, apparentSolar, unequalHours
- * - Each clock has holdMs and transCounts structures
- * - Clocks with no data return empty objects (not null/undefined)
- * - Data structure matches specification: Record<bucketId, Record<state, ms>> for holdMs
- * - Data structure matches specification: Record<bucketId, Record<transitionKey, count>> for transCounts
+ * - Response includes all 5 clocks as keys: utc, local, meanSolar, apparentSolar, unequalHours
+ * - Each clock has holdMs and transCounts as dense arrays
+ * - holdMs: number[][] where [state][bucket] = milliseconds
+ * - transCounts: number[][] where [transitionGroup][bucket] = count
+ * - Arrays are dense (all values present, zeros for missing data)
+ * - Response includes metadata (numStates, clockOrder, bucketsPerWeek)
  */
 export const testScenario2_AllClocksResponse = {
   description: 'getRawStats returns all 5 clocks in response',
@@ -67,7 +68,7 @@ export const testScenario2_AllClocksResponse = {
     'Create committed events',
     'Query getRawStats',
     'Verify all 5 clocks present',
-    'Verify empty clocks return empty objects',
+    'Verify empty clocks return zero-filled arrays',
   ],
 };
 
@@ -85,9 +86,9 @@ export const testScenario2_AllClocksResponse = {
  * 6. Query getRawStats({ controlId }) // no modelId
  * 
  * Verify:
- * - Query with modelId returns only that model's data
- * - Query without modelId returns aggregated data (sum across models)
- * - Aggregated data = sum of per-model queries
+ * - Query with modelId returns only that model's dense array data
+ * - Query without modelId returns aggregated data (element-wise sum of arrays)
+ * - Aggregated array = sum of per-model arrays (element by element)
  * - All clocks included in each response
  */
 export const testScenario3_ModelFiltering = {
@@ -115,6 +116,8 @@ export const testScenario3_ModelFiltering = {
  * Verify:
  * - Response includes all 5 clocks
  * - Time-of-day buckets are 0-287 (not 0-2015)
+ * - holdMs: number[][] where [state][dayBucket] = milliseconds
+ * - transCounts: number[][] where [transitionGroup][dayBucket] = count
  * - For each time-of-day bucket, value = sum of 7 corresponding time-of-week buckets
  * - Example: dayBucket 0 (00:00) = sum of buckets 0, 288, 576, 864, 1152, 1440, 1728
  * - Both holdMs and transCounts are aggregated correctly
@@ -160,7 +163,7 @@ export const testScenario5_TimeOfDayModelFiltering = {
  * 
  * Setup:
  * 1. Create config and control
- * 2. Do NOT create any committed events (no data in holdMs/transCounts)
+ * 2. Do NOT create any committed events (no data in analytics arrays)
  * 
  * Action:
  * 3. Query getRawStats({ controlId })
@@ -169,8 +172,8 @@ export const testScenario5_TimeOfDayModelFiltering = {
  * Verify:
  * - Queries return successfully (no errors)
  * - All 5 clocks present in response
- * - Each clock has empty holdMs and transCounts objects
- * - Not null/undefined, but empty structures
+ * - Each clock has zero-filled holdMs and transCounts arrays
+ * - Arrays have correct dimensions (not empty, but all zeros)
  */
 export const testScenario6_MissingDataHandling = {
   description: 'Missing data returns empty structures, not errors',
@@ -221,12 +224,14 @@ export const testScenario7_PartialClockData = {
  * 3. Query getRawStats({ controlId })
  * 
  * Verify:
- * - holdMs structure: Record<bucketId, Record<state, ms>>
- *   - Example: { 0: { 0: 5000, 1: 3000 } } means bucket 0: state 0 = 5000ms, state 1 = 3000ms
- * - transCounts structure: Record<bucketId, Record<transitionKey, count>>
- *   - transitionKey format: "${fromState}-${toState}"
- *   - Example: { 0: { "0-1": 2, "1-0": 1 } } means bucket 0: 0→1 = 2 transitions, 1→0 = 1 transition
- * - All numeric keys are numbers (not strings)
+ * - holdMs structure: number[][] where [state][bucket] = milliseconds
+ *   - Example: holdMs[0][0] = 5000 means state 0, bucket 0 = 5000ms
+ *   - Example: holdMs[1][0] = 3000 means state 1, bucket 0 = 3000ms
+ * - transCounts structure: number[][] where [transitionGroup][bucket] = count
+ *   - Transition groups are ordered: (0→1), (0→2), ..., (1→0), (1→2), ..., (N-1→N-2)
+ *   - Example: transCounts[0][0] = 2 means first transition (0→1), bucket 0 = 2 counts
+ * - Arrays are dense (all indices present, zeros for missing data)
+ * - Array dimensions match: holdMs.length = numStates, holdMs[state].length = 2016
  */
 export const testScenario8_DataStructureCorrectness = {
   description: 'Data structures match specification',
@@ -251,9 +256,10 @@ export const testScenario8_DataStructureCorrectness = {
  * 
  * Verify:
  * - dayBucket range is 0-287 (not 0-2015)
- * - holdMs structure: Record<dayBucket, Record<state, ms>>
- * - transCounts structure: Record<dayBucket, Record<transitionKey, count>>
+ * - holdMs structure: number[][] where [state][dayBucket] = milliseconds
+ * - transCounts structure: number[][] where [transitionGroup][dayBucket] = count
  * - Values correctly aggregated from 7 time-of-week buckets
+ * - Arrays are dense (all indices present)
  */
 export const testScenario9_TimeOfDayStructure = {
   description: 'Time-of-day profile structure matches specification',
@@ -266,18 +272,29 @@ export const testScenario9_TimeOfDayStructure = {
 };
 
 /**
- * Helper function to verify query response structure
+ * Helper function to verify query response structure for dense arrays
  * 
  * @param response - Query response to verify
  * @param expectedClocks - Array of expected clock IDs
+ * @param expectedNumStates - Expected number of states
+ * @param expectedBucketsPerWeek - Expected buckets per week (2016 for time-of-week, 288 for time-of-day)
  * @returns true if structure is correct
  */
 export function verifyResponseStructure(
   response: any,
-  expectedClocks: string[] = ['local', 'utc', 'meanSolar', 'apparentSolar', 'unequalHours'],
+  expectedClocks: string[] = ['utc', 'local', 'meanSolar', 'apparentSolar', 'unequalHours'],
+  expectedNumStates?: number,
+  expectedBucketsPerWeek: number = 2016,
 ): boolean {
   if (!response || !response.clocks) {
     return false;
+  }
+
+  // Check numStates if provided
+  if (expectedNumStates !== undefined) {
+    if (response.numStates !== expectedNumStates) {
+      return false;
+    }
   }
 
   // Check all expected clocks are present
@@ -291,14 +308,38 @@ export function verifyResponseStructure(
       return false;
     }
 
-    // Check holdMs and transCounts are present (even if empty)
+    // Check holdMs and transCounts are present and are arrays
     if (!('holdMs' in clockData) || !('transCounts' in clockData)) {
       return false;
     }
 
-    // Check they are objects (not null/undefined)
-    if (!clockData.holdMs || typeof clockData.holdMs !== 'object' || !clockData.transCounts || typeof clockData.transCounts !== 'object') {
+    // Check they are arrays
+    if (!Array.isArray(clockData.holdMs) || !Array.isArray(clockData.transCounts)) {
       return false;
+    }
+
+    // Verify dimensions if numStates provided
+    if (expectedNumStates !== undefined) {
+      // holdMs should be [numStates][bucketsPerWeek]
+      if (clockData.holdMs.length !== expectedNumStates) {
+        return false;
+      }
+      for (const stateArray of clockData.holdMs) {
+        if (!Array.isArray(stateArray) || stateArray.length !== expectedBucketsPerWeek) {
+          return false;
+        }
+      }
+
+      // transCounts should be [numStates * (numStates - 1)][bucketsPerWeek]
+      const expectedTransGroups = expectedNumStates * (expectedNumStates - 1);
+      if (clockData.transCounts.length !== expectedTransGroups) {
+        return false;
+      }
+      for (const transArray of clockData.transCounts) {
+        if (!Array.isArray(transArray) || transArray.length !== expectedBucketsPerWeek) {
+          return false;
+        }
+      }
     }
   }
 
@@ -306,9 +347,28 @@ export function verifyResponseStructure(
 }
 
 /**
+ * Helper function to sum two dense arrays element-wise.
+ * Used to combine per-model responses into an expected aggregate.
+ * 
+ * @param target - Target array (will be modified)
+ * @param source - Source array to add
+ */
+function sumArrays(target: number[], source: number[]): void {
+  if (target.length !== source.length) {
+    throw new Error(
+      `Array length mismatch: target=${target.length}, source=${source.length}`,
+    );
+  }
+  for (let i = 0; i < target.length; i++) {
+    target[i] = (target[i] || 0) + (source[i] || 0);
+  }
+}
+
+/**
  * Helper function to recursively merge numeric values by summing them.
  * Used to combine per-model responses into an expected aggregate.
  * 
+ * @deprecated Use sumArrays for dense array aggregation
  * @param target - Target object to merge into (will be modified)
  * @param source - Source object to merge from
  */
@@ -537,11 +597,11 @@ function deepEqual(a: any, b: any): boolean {
 }
 
 /**
- * Helper function to verify aggregated data equals sum of per-model data
+ * Helper function to verify aggregated data equals sum of per-model data (dense arrays)
  * 
  * @param aggregatedResponse - Response from query without modelId
  * @param perModelResponses - Array of responses from queries with modelId
- * @returns true if aggregated equals sum
+ * @returns true if aggregated equals element-wise sum
  */
 export function verifyAggregation(
   aggregatedResponse: any,
@@ -551,61 +611,76 @@ export function verifyAggregation(
     return false;
   }
 
-  // Start with a deep clone of the first per-model response
-  let expectedAggregate = deepClone(perModelResponses[0]);
+  const numStates = aggregatedResponse.numStates;
+  if (!numStates) {
+    return false;
+  }
 
-  // Merge remaining per-model responses
-  for (let i = 1; i < perModelResponses.length; i++) {
-    const perModelResponse = perModelResponses[i];
-    if (!perModelResponse) {
-      continue;
+  // For each clock, sum the per-model arrays element-wise
+  for (const clockId of ['utc', 'local', 'meanSolar', 'apparentSolar', 'unequalHours']) {
+    // Sum holdMs arrays
+    const expectedHoldMs: number[][] = [];
+    for (let state = 0; state < numStates; state++) {
+      const stateBuckets = new Array(2016).fill(0);
+      for (const perModelResponse of perModelResponses) {
+        if (
+          perModelResponse?.clocks?.[clockId]?.holdMs?.[state]
+        ) {
+          const modelStateBuckets = perModelResponse.clocks[clockId].holdMs[state];
+          for (let bucket = 0; bucket < 2016; bucket++) {
+            stateBuckets[bucket] += modelStateBuckets[bucket] || 0;
+          }
+        }
+      }
+      expectedHoldMs.push(stateBuckets);
     }
 
-    // Merge clocks from this per-model response into expected aggregate
-    if (perModelResponse.clocks && expectedAggregate.clocks) {
-      for (const clockId in perModelResponse.clocks) {
-        if (perModelResponse.clocks.hasOwnProperty(clockId)) {
-          const clockData = perModelResponse.clocks[clockId];
-          if (!expectedAggregate.clocks[clockId]) {
-            expectedAggregate.clocks[clockId] = deepClone(clockData);
-          } else {
-            // Merge holdMs
-            if (clockData.holdMs) {
-              if (!expectedAggregate.clocks[clockId].holdMs) {
-                expectedAggregate.clocks[clockId].holdMs = deepClone(clockData.holdMs);
-              } else {
-                mergeNumericValues(
-                  expectedAggregate.clocks[clockId].holdMs,
-                  clockData.holdMs,
-                );
-              }
-            }
-
-            // Merge transCounts
-            if (clockData.transCounts) {
-              if (!expectedAggregate.clocks[clockId].transCounts) {
-                expectedAggregate.clocks[clockId].transCounts = deepClone(
-                  clockData.transCounts,
-                );
-              } else {
-                mergeNumericValues(
-                  expectedAggregate.clocks[clockId].transCounts,
-                  clockData.transCounts,
-                );
-              }
-            }
+    // Sum transCounts arrays
+    const numTransGroups = numStates * (numStates - 1);
+    const expectedTransCounts: number[][] = [];
+    for (let group = 0; group < numTransGroups; group++) {
+      const groupBuckets = new Array(2016).fill(0);
+      for (const perModelResponse of perModelResponses) {
+        if (
+          perModelResponse?.clocks?.[clockId]?.transCounts?.[group]
+        ) {
+          const modelGroupBuckets = perModelResponse.clocks[clockId].transCounts[group];
+          for (let bucket = 0; bucket < 2016; bucket++) {
+            groupBuckets[bucket] += modelGroupBuckets[bucket] || 0;
           }
+        }
+      }
+      expectedTransCounts.push(groupBuckets);
+    }
+
+    // Compare with aggregated response
+    const actualHoldMs = aggregatedResponse.clocks[clockId]?.holdMs;
+    const actualTransCounts = aggregatedResponse.clocks[clockId]?.transCounts;
+
+    if (!actualHoldMs || !actualTransCounts) {
+      return false;
+    }
+
+    // Compare holdMs
+    for (let state = 0; state < numStates; state++) {
+      for (let bucket = 0; bucket < 2016; bucket++) {
+        if (Math.abs((actualHoldMs[state]?.[bucket] || 0) - (expectedHoldMs[state]?.[bucket] || 0)) > 0.001) {
+          return false;
+        }
+      }
+    }
+
+    // Compare transCounts
+    for (let group = 0; group < numTransGroups; group++) {
+      for (let bucket = 0; bucket < 2016; bucket++) {
+        if (Math.abs((actualTransCounts[group]?.[bucket] || 0) - (expectedTransCounts[group]?.[bucket] || 0)) > 0.001) {
+          return false;
         }
       }
     }
   }
 
-  // Normalize types (treat missing numeric fields as 0)
-  const normalizedExpected = normalizeNumericFields(expectedAggregate);
-  const normalizedActual = normalizeNumericFields(aggregatedResponse);
-
-  // Perform deep equality check
-  return deepEqual(normalizedExpected, normalizedActual);
+  return true;
 }
 
 /**

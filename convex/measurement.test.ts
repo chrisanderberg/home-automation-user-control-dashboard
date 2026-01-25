@@ -2,7 +2,7 @@
  * Test scenarios for Milestone 8: Measurement Ingestion
  * 
  * This file documents test scenarios for the measurement ingestion functionality.
- * These tests verify that committed events correctly update holdMs and transCounts.
+ * These tests verify that committed events correctly update dense analytics arrays.
  * 
  * Note: Convex testing is typically done through integration tests or manual verification.
  * These scenarios can be executed manually via the Convex dashboard or automated
@@ -26,10 +26,10 @@
  * 5. Commit a change at t1 (isCommitted=true, initiator="user")
  * 
  * Verify:
- * - holdMs updated for all defined clocks
- * - For each clock, sum of ms across buckets equals (t1 - t0)
- * - transCounts incremented for all defined clocks (since initiator="user")
- * - Transition recorded in correct bucket for each clock
+ * - Dense analytics array updated for all defined clocks
+ * - For each clock, sum of holding time values across buckets equals (t1 - t0)
+ * - Transition counts incremented for all defined clocks (since initiator="user")
+ * - Transition recorded at correct array index for each clock using index math
  */
 export const testScenario1_BasicHoldingTime = {
   description: 'Basic holding time measurement and user transition counting',
@@ -55,8 +55,8 @@ export const testScenario1_BasicHoldingTime = {
  * 4. Commit a change at t1 with initiator="model"
  * 
  * Verify:
- * - holdMs updated for all defined clocks (holding time still measured)
- * - transCounts NOT incremented (only user transitions counted)
+ * - Dense analytics array updated for all defined clocks (holding time still measured)
+ * - Transition counts NOT incremented (only user transitions counted)
  */
 export const testScenario2_ModelInitiatedNoTransition = {
   description: 'Model-initiated changes update holding time but not transition counts',
@@ -84,7 +84,7 @@ export const testScenario2_ModelInitiatedNoTransition = {
  * Verify:
  * - No committed events created for uncommitted updates
  * - Only the final committed update creates analytics changes
- * - holdMs and transCounts only reflect the committed change
+ * - Dense analytics arrays only reflect the committed change
  */
 export const testScenario3_UncommittedNoEffect = {
   description: 'Uncommitted updates do not affect analytics',
@@ -112,7 +112,7 @@ export const testScenario3_UncommittedNoEffect = {
  * - Unequal hours clock returns undefined (no sunrise/sunset)
  * - Other clocks (local, utc, meanSolar, apparentSolar) may also be undefined at poles
  * - Undefined clocks are skipped gracefully (no errors)
- * - Only defined clocks have entries in holdMs and transCounts
+ * - Only defined clocks have non-zero values in dense analytics arrays
  */
 export const testScenario4_UndefinedClocks = {
   description: 'Undefined clocks are skipped gracefully',
@@ -142,7 +142,7 @@ export const testScenario4_UndefinedClocks = {
  * 
  * Verify:
  * - Invalid data is discarded (no partial updates)
- * - No entries created in holdMs or transCounts
+ * - No changes made to dense analytics arrays
  * - Errors logged but mutation doesn't fail
  */
 export const testScenario5_IntegrityFailures = {
@@ -184,8 +184,8 @@ export const testScenario5_IntegrityFailures = {
  * 
  * Verify:
  * - Interval split across multiple buckets per clock
- * - Sum of ms across all buckets equals (t1 - t0) for each clock
- * - Each bucket receives correct allocation based on overlap
+ * - Sum of holding time values across all buckets equals (t1 - t0) for each clock
+ * - Each bucket receives correct allocation based on overlap in dense array
  */
 export const testScenario6_MultiBucketSplitting = {
   description: 'Holding intervals spanning multiple buckets are split correctly',
@@ -235,10 +235,11 @@ export const testScenario7_WeekWrap = {
  * 4. Commit a change
  * 
  * Verify:
- * - All 5 clocks processed: local, utc, meanSolar, apparentSolar, unequalHours
- * - Each clock has entries in holdMs (where defined)
- * - Each clock has entries in transCounts (where defined and initiator="user")
+ * - All 5 clocks processed: utc, local, meanSolar, apparentSolar, unequalHours
+ * - Each clock has values in dense analytics array (where defined)
+ * - Each clock has transition counts (where defined and initiator="user")
  * - Clock-specific bucket mappings are correct
+ * - Array indices calculated correctly using index math
  */
 export const testScenario8_AllClocksProcessed = {
   description: 'All five clocks are processed for each committed event',
@@ -252,24 +253,26 @@ export const testScenario8_AllClocksProcessed = {
 };
 
 /**
- * Helper function to verify test results
+ * Helper function to verify test results for dense arrays
  * 
  * This can be used in manual testing or automated test framework:
  * 
  * @example
- * // Verify holdMs sum equals expected interval
- * const holdMsSum = sumHoldMsForInterval(controlId, modelId, clockId, t0, t1);
+ * // Verify holding time sum equals expected interval
+ * // Extract from dense array: sum all buckets for a given state and clock
+ * const holdMsSum = sumArrayValues(holdMsArray[state]);
  * assert(holdMsSum === (t1 - t0), 'Holding time sum should equal interval');
  * 
  * // Verify transition count incremented
- * const transCount = getTransCount(controlId, modelId, clockId, bucketId, fromState, toState);
- * assert(transCount === 1, 'Transition count should be 1');
+ * // Extract from dense array using index math
+ * const transIndex = transIndex(fromState, toState, clockIndex, bucketId, numStates);
+ * assert(denseArray[transIndex] === 1, 'Transition count should be 1');
  */
 export function verifyHoldMsSum(
-  holdMsEntries: Array<{ bucketId: number; ms: number }>,
+  holdMsArray: number[],
   expectedTotalMs: number,
 ): boolean {
-  const sum = holdMsEntries.reduce((acc, entry) => acc + entry.ms, 0);
+  const sum = holdMsArray.reduce((acc, ms) => acc + ms, 0);
   return Math.abs(sum - expectedTotalMs) < 1; // Allow 1ms tolerance for rounding
 }
 

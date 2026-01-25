@@ -6,114 +6,146 @@
  * 
  * All queries return data for all 5 clocks in a single response.
  * Queries do NOT accept clockId as input - they always return all clocks.
+ * 
+ * Returns dense numerical arrays per MANUAL.md specification.
  */
 
 import { query } from './_generated/server.js';
 import { v } from 'convex/values';
 import type { GenericQueryCtx } from 'convex/server';
 import type { DataModel } from './_generated/dataModel.js';
-import { aggregateTimeOfDay } from '@home-automation/core';
-import type { ClockId } from '@home-automation/core';
+import {
+  type ClockId,
+  type ControlDefinition,
+  holdIndex,
+  transIndex,
+  BUCKETS_PER_WEEK,
+  VALUES_PER_BUCKET_GROUP,
+  type ClockIndex,
+  BUCKETS_PER_DAY,
+} from '@home-automation/core';
 
 type QueryCtx = GenericQueryCtx<DataModel>;
 
 /**
- * All five clock identifiers that must be included in responses.
+ * All five clock identifiers in canonical order (matches MANUAL.md).
  */
 const ALL_CLOCKS: ClockId[] = [
-  'local',
   'utc',
+  'local',
   'meanSolar',
   'apparentSolar',
   'unequalHours',
 ];
 
 /**
- * Helper function to aggregate raw stats from database rows.
- * Used by both getRawStats and getRawTimeOfDayProfile.
+ * Map clock ID to clock index (canonical ordering from MANUAL.md).
  */
-async function aggregateRawStats(
+function getClockIndex(clockId: ClockId): ClockIndex {
+  switch (clockId) {
+    case 'utc':
+      return 0;
+    case 'local':
+      return 1;
+    case 'meanSolar':
+      return 2;
+    case 'apparentSolar':
+      return 3;
+    case 'unequalHours':
+      return 4;
+    default:
+      throw new Error(`Unknown clock ID: ${clockId}`);
+  }
+}
+
+/**
+ * Get number of states from a control definition.
+ */
+function getNumStates(definition: ControlDefinition): number {
+  if (definition.kind === 'radiobutton') {
+    return definition.numStates;
+  } else {
+    // Slider always has 6 states
+    return 6;
+  }
+}
+
+/**
+ * Load and aggregate analytics blobs for a control.
+ * 
+ * If modelId is provided, returns data for that model only.
+ * If modelId is omitted, aggregates (sums) across all models.
+ * 
+ * @param ctx - Query context
+ * @param controlId - Control identifier
+ * @param modelId - Optional model identifier
+ * @returns Aggregated dense array data
+ */
+async function loadAnalyticsData(
   ctx: QueryCtx,
   controlId: string,
   modelId?: string,
 ): Promise<{
-  holdMsByClock: Record<ClockId, Record<number, Record<number, number>>>;
-  transCountsByClock: Record<ClockId, Record<number, Record<string, number>>>;
+  numStates: number;
+  data: number[];
 }> {
-  // Query holdMs
-  const holdMsRows = await ctx.db
-    .query('holdMs')
+  // Load control definition to get numStates
+  const control = await ctx.db
+    .query('controls')
     .withIndex('by_controlId', (q: any) => q.eq('controlId', controlId))
+    .first();
+
+  if (!control) {
+    throw new Error(`Control not found: ${controlId}`);
+  }
+
+  const definition = control.definition as ControlDefinition;
+  const numStates = getNumStates(definition);
+
+  // Query analytics blobs for this control
+  const windowId = 'default'; // Seasonal windows deferred
+  const allBlobs = await ctx.db
+    .query('analyticsBlobs')
+    .withIndex('by_control_model_window', (q: any) =>
+      q.eq('controlId', controlId).eq('windowId', windowId),
+    )
     .collect();
 
   // Filter by modelId if provided
-  const filteredHoldMs = modelId
-    ? holdMsRows.filter((row) => row.modelId === modelId)
-    : holdMsRows;
+  const filteredBlobs = modelId
+    ? allBlobs.filter((blob) => blob.modelId === modelId)
+    : allBlobs;
 
-  // Query transCounts
-  const transCountsRows = await ctx.db
-    .query('transCounts')
-    .withIndex('by_controlId', (q: any) => q.eq('controlId', controlId))
-    .collect();
-
-  // Filter by modelId if provided
-  const filteredTransCounts = modelId
-    ? transCountsRows.filter((row) => row.modelId === modelId)
-    : transCountsRows;
-
-  // Aggregate holdMs by (clockId, bucketId, state)
-  const holdMsByClock: Record<
-    ClockId,
-    Record<number, Record<number, number>>
-  > = {
-    local: {},
-    utc: {},
-    meanSolar: {},
-    apparentSolar: {},
-    unequalHours: {},
-  };
-
-  for (const row of filteredHoldMs) {
-    const clockId = row.clockId as ClockId;
-    const bucketId = row.bucketId as number;
-    if (!holdMsByClock[clockId]) {
-      continue; // Skip unknown clock IDs
-    }
-    if (!holdMsByClock[clockId][bucketId]) {
-      holdMsByClock[clockId][bucketId] = {};
-    }
-    const bucket = holdMsByClock[clockId][bucketId];
-    bucket[row.state] = (bucket[row.state] || 0) + row.ms;
+  if (filteredBlobs.length === 0) {
+    // Return zero-filled array if no data
+    const emptyData = new Array(numStates * numStates * VALUES_PER_BUCKET_GROUP).fill(0);
+    return { numStates, data: emptyData };
   }
 
-  // Aggregate transCounts by (clockId, bucketId, fromState, toState)
-  const transCountsByClock: Record<
-    ClockId,
-    Record<number, Record<string, number>>
-  > = {
-    local: {},
-    utc: {},
-    meanSolar: {},
-    apparentSolar: {},
-    unequalHours: {},
-  };
+  // Aggregate (sum) across all matching blobs
+  const aggregatedData = new Array(
+    numStates * numStates * VALUES_PER_BUCKET_GROUP,
+  ).fill(0);
 
-  for (const row of filteredTransCounts) {
-    const clockId = row.clockId as ClockId;
-    const bucketId = row.bucketId as number;
-    if (!transCountsByClock[clockId]) {
-      continue; // Skip unknown clock IDs
+  for (const blob of filteredBlobs) {
+    if (blob.numStates !== numStates) {
+      console.warn(
+        `[loadAnalyticsData] Blob numStates mismatch: expected ${numStates}, got ${blob.numStates} for controlId: ${controlId}, modelId: ${blob.modelId}`,
+      );
+      continue;
     }
-    if (!transCountsByClock[clockId][bucketId]) {
-      transCountsByClock[clockId][bucketId] = {};
+    if (blob.data.length !== aggregatedData.length) {
+      console.warn(
+        `[loadAnalyticsData] Blob size mismatch: expected ${aggregatedData.length}, got ${blob.data.length}`,
+      );
+      continue;
     }
-    const bucket = transCountsByClock[clockId][bucketId];
-    const transitionKey = `${row.fromState}-${row.toState}`;
-    bucket[transitionKey] = (bucket[transitionKey] || 0) + row.count;
+    for (let i = 0; i < aggregatedData.length; i++) {
+      aggregatedData[i] += blob.data[i] || 0;
+    }
   }
 
-  return { holdMsByClock, transCountsByClock };
+  return { numStates, data: aggregatedData };
 }
 
 /**
@@ -181,12 +213,14 @@ export const getControlRuntime = query({
 /**
  * Get raw statistics (holdMs and transCounts) for a control.
  * 
- * Returns data for all 5 clocks, with optional model filtering.
+ * Returns dense numerical arrays for all 5 clocks, with optional model filtering.
  * 
  * @param controlId - The control identifier
  * @param modelId - Optional model identifier. If provided, returns only that model's data.
  *                  If omitted, aggregates across all models.
- * @returns Raw statistics grouped by clock, with holdMs and transCounts per bucket
+ * @returns Dense arrays with metadata. Each clock has:
+ *   - holdMs: array of N × 2016 values (one per state × bucket)
+ *   - transCounts: array of N × (N-1) × 2016 values (one per transition × bucket)
  */
 export const getRawStats = query({
   // @ts-ignore - QueryBuilder type doesn't properly support args/handler syntax in this TypeScript version
@@ -195,44 +229,71 @@ export const getRawStats = query({
     modelId: v.optional(v.string()),
   }),
   handler: async (ctx: QueryCtx, args: any) => {
-    // Aggregate raw stats using helper function
-    const { holdMsByClock, transCountsByClock } = await aggregateRawStats(
+    // Load aggregated analytics data
+    const { numStates, data } = await loadAnalyticsData(
       ctx,
       args.controlId,
       args.modelId,
     );
 
-    // Build response with all clocks
+    // Extract data for each clock
     const clocks: Record<
       ClockId,
       {
-        holdMs: Record<number, Record<number, number>>;
-        transCounts: Record<number, Record<string, number>>;
+        holdMs: number[][]; // [state][bucket] = milliseconds
+        transCounts: number[][]; // [transitionGroup][bucket] = count
       }
     > = {
-      local: {
-        holdMs: holdMsByClock.local,
-        transCounts: transCountsByClock.local,
-      },
-      utc: {
-        holdMs: holdMsByClock.utc,
-        transCounts: transCountsByClock.utc,
-      },
-      meanSolar: {
-        holdMs: holdMsByClock.meanSolar,
-        transCounts: transCountsByClock.meanSolar,
-      },
-      apparentSolar: {
-        holdMs: holdMsByClock.apparentSolar,
-        transCounts: transCountsByClock.apparentSolar,
-      },
-      unequalHours: {
-        holdMs: holdMsByClock.unequalHours,
-        transCounts: transCountsByClock.unequalHours,
-      },
+      utc: { holdMs: [], transCounts: [] },
+      local: { holdMs: [], transCounts: [] },
+      meanSolar: { holdMs: [], transCounts: [] },
+      apparentSolar: { holdMs: [], transCounts: [] },
+      unequalHours: { holdMs: [], transCounts: [] },
     };
 
-    return { clocks };
+    // Extract holding times for each clock
+    for (const clockId of ALL_CLOCKS) {
+      const clockIndex = getClockIndex(clockId);
+
+      // Extract holding times: N states × 2016 buckets
+      const holdMs: number[][] = [];
+      for (let state = 0; state < numStates; state++) {
+        const stateBuckets: number[] = [];
+        for (let bucket = 0; bucket < BUCKETS_PER_WEEK; bucket++) {
+          const index = holdIndex(state, clockIndex, bucket);
+          stateBuckets.push(data[index] || 0);
+        }
+        holdMs.push(stateBuckets);
+      }
+      clocks[clockId].holdMs = holdMs;
+
+      // Extract transition counts: N × (N-1) transition groups × 2016 buckets
+      const transCounts: number[][] = [];
+      for (let from = 0; from < numStates; from++) {
+        for (let to = 0; to < numStates; to++) {
+          if (from === to) continue; // Skip self-transitions
+
+          const transitionBuckets: number[] = [];
+          for (let bucket = 0; bucket < BUCKETS_PER_WEEK; bucket++) {
+            const index = transIndex(from, to, clockIndex, bucket, numStates);
+            transitionBuckets.push(data[index] || 0);
+          }
+          transCounts.push(transitionBuckets);
+        }
+      }
+      clocks[clockId].transCounts = transCounts;
+    }
+
+    return {
+      numStates,
+      clocks,
+      // Metadata for array access
+      metadata: {
+        bucketsPerWeek: BUCKETS_PER_WEEK,
+        numClocks: 5,
+        clockOrder: ['utc', 'local', 'meanSolar', 'apparentSolar', 'unequalHours'],
+      },
+    };
   },
 });
 
@@ -245,7 +306,7 @@ export const getRawStats = query({
  * @param controlId - The control identifier
  * @param modelId - Optional model identifier. If provided, returns only that model's data.
  *                  If omitted, aggregates across all models.
- * @returns Time-of-day profile grouped by clock, with holdMs and transCounts per dayBucket
+ * @returns Time-of-day profile as dense arrays grouped by clock
  */
 export const getRawTimeOfDayProfile = query({
   // @ts-ignore - QueryBuilder type doesn't properly support args/handler syntax in this TypeScript version
@@ -254,105 +315,88 @@ export const getRawTimeOfDayProfile = query({
     modelId: v.optional(v.string()),
   }),
   handler: async (ctx: QueryCtx, args: any) => {
-    // Aggregate raw stats using helper function
-    const { holdMsByClock, transCountsByClock } = await aggregateRawStats(
+    // Load aggregated analytics data
+    const { numStates, data } = await loadAnalyticsData(
       ctx,
       args.controlId,
       args.modelId,
     );
 
+    // BUCKETS_PER_DAY imported from core
+
     // Build time-of-day profiles for each clock
     const clocks: Record<
       ClockId,
       {
-        holdMs: Record<number, Record<number, number>>;
-        transCounts: Record<number, Record<string, number>>;
+        holdMs: number[][]; // [state][dayBucket] = milliseconds
+        transCounts: number[][]; // [transitionGroup][dayBucket] = count
       }
     > = {
-      local: { holdMs: {}, transCounts: {} },
-      utc: { holdMs: {}, transCounts: {} },
-      meanSolar: { holdMs: {}, transCounts: {} },
-      apparentSolar: { holdMs: {}, transCounts: {} },
-      unequalHours: { holdMs: {}, transCounts: {} },
+      utc: { holdMs: [], transCounts: [] },
+      local: { holdMs: [], transCounts: [] },
+      meanSolar: { holdMs: [], transCounts: [] },
+      apparentSolar: { holdMs: [], transCounts: [] },
+      unequalHours: { holdMs: [], transCounts: [] },
     };
 
     // Process each clock
     for (const clockId of ALL_CLOCKS) {
-      const clockHoldMs = holdMsByClock[clockId];
-      const clockTransCounts = transCountsByClock[clockId];
+      const clockIndex = getClockIndex(clockId);
 
-      // Aggregate holdMs by state first, then aggregate time-of-day
-      // We need to aggregate each state separately
-      const holdMsByState = new Map<number, Map<number, number>>();
+      // Aggregate holding times: sum time-of-week → time-of-day
+      const holdMs: number[][] = [];
+      for (let state = 0; state < numStates; state++) {
+        const dayBuckets = new Array(BUCKETS_PER_DAY).fill(0);
 
-      // Collect all states and their bucket data
-      for (const [bucketIdStr, stateData] of Object.entries(clockHoldMs)) {
-        const bucketId = Number(bucketIdStr);
-        for (const [stateStr, ms] of Object.entries(stateData)) {
-          const state = Number(stateStr);
-          if (!holdMsByState.has(state)) {
-            holdMsByState.set(state, new Map());
+        // For each time-of-day bucket, sum the 7 corresponding time-of-week buckets
+        for (let dayBucket = 0; dayBucket < BUCKETS_PER_DAY; dayBucket++) {
+          let sum = 0;
+          // Sum across 7 days: dayBucket, dayBucket + 288, dayBucket + 576, etc.
+          for (let day = 0; day < 7; day++) {
+            const weekBucket = dayBucket + day * BUCKETS_PER_DAY;
+            const index = holdIndex(state, clockIndex, weekBucket);
+            sum += data[index] || 0;
           }
-          holdMsByState.get(state)!.set(bucketId, ms);
+          dayBuckets[dayBucket] = sum;
+        }
+        holdMs.push(dayBuckets);
+      }
+      clocks[clockId].holdMs = holdMs;
+
+      // Aggregate transition counts: sum time-of-week → time-of-day
+      const transCounts: number[][] = [];
+      for (let from = 0; from < numStates; from++) {
+        for (let to = 0; to < numStates; to++) {
+          if (from === to) continue; // Skip self-transitions
+
+          const dayBuckets = new Array(BUCKETS_PER_DAY).fill(0);
+
+          // For each time-of-day bucket, sum the 7 corresponding time-of-week buckets
+          for (let dayBucket = 0; dayBucket < BUCKETS_PER_DAY; dayBucket++) {
+            let sum = 0;
+            // Sum across 7 days
+            for (let day = 0; day < 7; day++) {
+              const weekBucket = dayBucket + day * BUCKETS_PER_DAY;
+              const index = transIndex(from, to, clockIndex, weekBucket, numStates);
+              sum += data[index] || 0;
+            }
+            dayBuckets[dayBucket] = sum;
+          }
+          transCounts.push(dayBuckets);
         }
       }
-
-      // Aggregate each state's time-of-week buckets into time-of-day buckets
-      const aggregatedHoldMs: Record<number, Record<number, number>> = {};
-      for (const [state, weekBuckets] of holdMsByState.entries()) {
-        const dayBuckets = aggregateTimeOfDay(
-          weekBuckets,
-          (a, b) => a + b,
-          0,
-        );
-
-        for (const [dayBucket, ms] of dayBuckets.entries()) {
-          if (!aggregatedHoldMs[dayBucket]) {
-            aggregatedHoldMs[dayBucket] = {};
-          }
-          aggregatedHoldMs[dayBucket][state] = ms;
-        }
-      }
-
-      // Aggregate transCounts by transition key first, then aggregate time-of-day
-      const transCountsByTransition = new Map<string, Map<number, number>>();
-
-      // Collect all transitions and their bucket data
-      for (const [bucketIdStr, transitionData] of Object.entries(
-        clockTransCounts,
-      )) {
-        const bucketId = Number(bucketIdStr);
-        for (const [transitionKey, count] of Object.entries(transitionData)) {
-          if (!transCountsByTransition.has(transitionKey)) {
-            transCountsByTransition.set(transitionKey, new Map());
-          }
-          transCountsByTransition.get(transitionKey)!.set(bucketId, count);
-        }
-      }
-
-      // Aggregate each transition's time-of-week buckets into time-of-day buckets
-      const aggregatedTransCounts: Record<number, Record<string, number>> = {};
-      for (const [transitionKey, weekBuckets] of transCountsByTransition.entries()) {
-        const dayBuckets = aggregateTimeOfDay(
-          weekBuckets,
-          (a, b) => a + b,
-          0,
-        );
-
-        for (const [dayBucket, count] of dayBuckets.entries()) {
-          if (!aggregatedTransCounts[dayBucket]) {
-            aggregatedTransCounts[dayBucket] = {};
-          }
-          aggregatedTransCounts[dayBucket][transitionKey] = count;
-        }
-      }
-
-      clocks[clockId] = {
-        holdMs: aggregatedHoldMs,
-        transCounts: aggregatedTransCounts,
-      };
+      clocks[clockId].transCounts = transCounts;
     }
 
-    return { clocks };
+    return {
+      numStates,
+      clocks,
+      // Metadata for array access
+      metadata: {
+        bucketsPerDay: BUCKETS_PER_DAY,
+        numClocks: 5,
+        clockOrder: ['utc', 'local', 'meanSolar', 'apparentSolar', 'unequalHours'],
+      },
+    };
   },
 });

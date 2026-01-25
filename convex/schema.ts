@@ -151,84 +151,42 @@ export default defineSchema({
     .index('by_controlId_tsMs', ['controlId', 'tsMs']),
 
   /**
-   * Holding time measurement aggregates.
+   * Dense analytics data blobs.
    * 
-   * Stores accumulated milliseconds that a control spent in each state,
-   * split across time-of-week buckets per clock.
+   * Stores aggregated sufficient statistics as dense numerical arrays per
+   * (control, model, window) combination.
    * 
-   * Key dimensions:
-   * - controlId: which control
-   * - modelId: which automation model (or aggregated across all models)
-   * - clockId: which clock (local, utc, meanSolar, apparentSolar, unequalHours)
-   * - bucketId: which time-of-week bucket (0-2015, 5-minute buckets)
-   * - state: which discrete state the control was in
-   * 
-   * Value:
-   * - ms: accumulated milliseconds in this (control, model, clock, bucket, state) combination
-   * 
-   * Index optimization:
-   * - by_controlId: single-column index for queries scoped to a control
-   * - by_control_model_clock_bucket_state: composite index for exact lookups and multi-dimension queries
-   * - Single-column indexes on modelId, clockId, bucketId, or state are not needed as queries
-   *   always start with controlId and the composite index supports all query patterns.
-   * - Before deploying, ensure tests/query logs validate no removed indexes are required.
-   */
-  holdMs: defineTable({
-    controlId: v.string(),
-    modelId: v.string(), // ModelId
-    clockId: clockIdValidator,
-    bucketId: v.number(), // Time-of-week bucket index [0, 2015]
-    state: v.number(), // Discrete state
-    ms: v.number(), // Accumulated milliseconds
-  })
-    .index('by_controlId', ['controlId'])
-    .index('by_control_model_clock_bucket_state', [
-      'controlId',
-      'modelId',
-      'clockId',
-      'bucketId',
-      'state',
-    ]),
-
-  /**
-   * Transition count measurement aggregates.
-   * 
-   * Stores accumulated counts of user-initiated transitions between states,
-   * split across time-of-week buckets per clock.
+   * Array layout (per MANUAL.md):
+   * - Total size: N² × G where N = numStates, G = 10080 (2016 buckets × 5 clocks)
+   * - Holding times: N × G values (one group per state)
+   * - Transition counts: N × (N-1) × G values (one group per transition pair)
    * 
    * Key dimensions:
    * - controlId: which control
-   * - modelId: which automation model (or aggregated across all models)
-   * - clockId: which clock (local, utc, meanSolar, apparentSolar, unequalHours)
-   * - bucketId: which time-of-week bucket (0-2015, 5-minute buckets)
-   * - fromState: source discrete state
-   * - toState: destination discrete state
+   * - modelId: which automation model
+   * - windowId: seasonal window identifier (default: "default" for now)
    * 
-   * Value:
-   * - count: accumulated integer count of transitions in this combination
+   * Data structure:
+   * - numStates: number of discrete states (N) for this control
+   * - data: dense array of N² × G numbers
+   * - version: schema version for future migrations
    * 
-   * Note: Only user-initiated transitions are counted (initiator="user").
-   * Model-initiated transitions are not recorded here.
+   * Clock ordering (canonical):
+   * - 0 = UTC
+   * - 1 = Local time
+   * - 2 = Mean solar time
+   * - 3 = Apparent solar time
+   * - 4 = Unequal hours
+   * 
+   * Note: Missing data is semantically zero (dense arrays, not sparse maps).
    */
-  transCounts: defineTable({
+  analyticsBlobs: defineTable({
     controlId: v.string(),
     modelId: v.string(), // ModelId
-    clockId: clockIdValidator,
-    bucketId: v.number(), // Time-of-week bucket index [0, 2015]
-    fromState: v.number(), // Source discrete state
-    toState: v.number(), // Destination discrete state
-    count: v.number(), // Accumulated integer count
+    windowId: v.string(), // Seasonal window identifier (default: "default")
+    numStates: v.number(), // Number of discrete states (N) for index calculations
+    data: v.array(v.number()), // Dense array of N² × G values
+    version: v.number(), // Schema version for future migrations (start at 1)
   })
-    .index('by_controlId', ['controlId'])
-    .index('by_modelId', ['modelId'])
-    .index('by_clockId', ['clockId'])
-    .index('by_bucketId', ['bucketId'])
-    .index('by_control_model_clock_bucket_from_to', [
-      'controlId',
-      'modelId',
-      'clockId',
-      'bucketId',
-      'fromState',
-      'toState',
-    ]),
+    .index('by_control_model_window', ['controlId', 'modelId', 'windowId']),
 });

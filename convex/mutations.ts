@@ -345,7 +345,7 @@ export const setControlValue = mutation({
       });
 
       // Trigger analytics ingestion (Milestone 8)
-      // Process the committed event to update holdMs and transCounts
+      // Process the committed event to update dense analytics arrays
       await ingestCommittedEvent(ctx, {
         event: {
           tsMs,

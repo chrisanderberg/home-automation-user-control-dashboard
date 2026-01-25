@@ -29,3 +29,8 @@ export * from './clocks/index.js';
  * Re-export all measurement utilities.
  */
 export * from './measurement/splitHoldInterval/index.js';
+
+/**
+ * Re-export dense array analytics utilities.
+ */
+export * from './analytics/denseArray/index.js';
