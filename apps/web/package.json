@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview"
+    "dev": "pnpm exec vite",
+    "build": "tsc && pnpm exec vite build",
+    "preview": "pnpm exec vite preview"
   },
   "dependencies": {
     "react": "^18.2.0",
