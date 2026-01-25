@@ -272,6 +272,89 @@ export const testScenario9_TimeOfDayStructure = {
 };
 
 /**
+ * Test Scenario 10: Quarter-Based Queries
+ * 
+ * Tests that queries correctly support quarter-based windowId filtering.
+ * 
+ * Setup:
+ * 1. Create config and control
+ * 2. Ingest events across multiple quarters (e.g., Q1 2024, Q2 2024)
+ * 
+ * Test Cases:
+ * 
+ * Case 10a: Explicit windowId Parameter
+ * - Query getRawStats(controlId, { windowId: "2024-Q1" })
+ *   → Should return only Q1 2024 data
+ * - Query getRawStats(controlId, { windowId: "2024-Q2" })
+ *   → Should return only Q2 2024 data
+ * - Verify data is correctly filtered by quarter
+ * 
+ * Case 10b: tsMs Parameter (Compute windowId from Timestamp)
+ * - Query getRawStats(controlId, { tsMs: 2024-03-15T12:00:00Z })
+ *   → Should compute windowId as "2024-Q1" and return Q1 data
+ * - Query getRawStats(controlId, { tsMs: 2024-05-15T12:00:00Z })
+ *   → Should compute windowId as "2024-Q2" and return Q2 data
+ * 
+ * Case 10c: No windowId (Aggregate All Quarters)
+ * - Query getRawStats(controlId) without windowId
+ *   → Should aggregate data across all quarters (backward compatibility)
+ * - Verify sum equals sum of individual quarter queries
+ * 
+ * Case 10d: windowId Precedence
+ * - Query getRawStats(controlId, { windowId: "2024-Q1", tsMs: 2024-05-15T12:00:00Z })
+ *   → windowId should take precedence, return Q1 data (not Q2)
+ * 
+ * Case 10e: getRawTimeOfDayProfile with Quarters
+ * - Same test cases as above but for getRawTimeOfDayProfile
+ * - Verify time-of-day aggregation works correctly with quarter filtering
+ * 
+ * Case 10f: Legacy 'default' windowId
+ * - Query with windowId: "default" should still work (backward compatibility)
+ * - Verify old data with "default" windowId is still accessible
+ * 
+ * Verify:
+ * - Explicit windowId parameter correctly filters data
+ * - tsMs parameter correctly computes and filters by quarter
+ * - No windowId aggregates across all quarters
+ * - windowId takes precedence over tsMs when both provided
+ * - Legacy "default" windowId still works
+ * - Both getRawStats and getRawTimeOfDayProfile support quarter filtering
+ */
+export const testScenario10_QuarterBasedQueries = {
+  description: 'Quarter-based windowId filtering in queries',
+  steps: [
+    'Create config and control',
+    'Ingest events across multiple quarters',
+    'Test explicit windowId parameter',
+    'Test tsMs parameter (compute windowId)',
+    'Test no windowId (aggregate all)',
+    'Test windowId precedence over tsMs',
+    'Test getRawTimeOfDayProfile with quarters',
+    'Test legacy "default" windowId',
+    'Verify backward compatibility',
+  ],
+  testCases: {
+    explicitWindowId: {
+      q1Only: 'Returns only Q1 data',
+      q2Only: 'Returns only Q2 data',
+    },
+    tsMsComputation: {
+      march15: 'Computes "2024-Q1"',
+      may15: 'Computes "2024-Q2"',
+    },
+    aggregateAll: {
+      noWindowId: 'Aggregates across all quarters',
+    },
+    precedence: {
+      windowIdOverTsMs: 'windowId takes precedence',
+    },
+    legacy: {
+      defaultWindowId: 'Still accessible',
+    },
+  },
+};
+
+/**
  * Helper function to verify query response structure for dense arrays
  * 
  * @param response - Query response to verify
@@ -730,5 +813,13 @@ export const expectedResults = {
     dayBucketRangeCorrect: true,
     structureMatchesSpec: true,
     aggregationCorrect: true,
+  },
+  scenario10: {
+    explicitWindowIdWorks: true,
+    tsMsComputationWorks: true,
+    aggregateAllWorks: true,
+    precedenceCorrect: true,
+    legacyDefaultWorks: true,
+    bothQueriesSupportQuarters: true,
   },
 };

@@ -79,6 +79,64 @@ function getNumStates(definition: ControlDefinition): number {
 }
 
 /**
+ * Gets the UTC calendar quarter from a timestamp.
+ * 
+ * Quarter boundaries are defined in UTC calendar time:
+ * - Q1: January–March (months 0-2)
+ * - Q2: April–June (months 3-5)
+ * - Q3: July–September (months 6-8)
+ * - Q4: October–December (months 9-11)
+ * 
+ * @param tsMs - Timestamp in milliseconds since epoch
+ * @returns Object with year and quarter (1-4)
+ */
+function getUtcQuarterFromTimestamp(tsMs: number): { year: number; quarter: number } {
+  const date = new Date(tsMs);
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth(); // 0-11
+  
+  // Determine quarter based on month
+  let quarter: number;
+  if (month >= 0 && month <= 2) {
+    quarter = 1; // Q1: Jan-Mar
+  } else if (month >= 3 && month <= 5) {
+    quarter = 2; // Q2: Apr-Jun
+  } else if (month >= 6 && month <= 8) {
+    quarter = 3; // Q3: Jul-Sep
+  } else {
+    quarter = 4; // Q4: Oct-Dec
+  }
+  
+  return { year, quarter };
+}
+
+/**
+ * Formats a quarter window identifier as a string.
+ * 
+ * Format: "YYYY-Q{1-4}" (e.g., "2024-Q1")
+ * 
+ * @param year - UTC year
+ * @param quarter - Quarter number (1-4)
+ * @returns Formatted window identifier string
+ */
+function formatQuarterWindowId(year: number, quarter: number): string {
+  return `${year}-Q${quarter}`;
+}
+
+/**
+ * Gets the quarter window identifier from a timestamp.
+ * 
+ * Convenience function that combines getUtcQuarterFromTimestamp and formatQuarterWindowId.
+ * 
+ * @param tsMs - Timestamp in milliseconds since epoch
+ * @returns Quarter window identifier string (format: "YYYY-Q{1-4}")
+ */
+export function getQuarterWindowIdFromTimestamp(tsMs: number): string {
+  const { year, quarter } = getUtcQuarterFromTimestamp(tsMs);
+  return formatQuarterWindowId(year, quarter);
+}
+
+/**
  * Parameters for ingesting a committed event.
  */
 interface IngestionParams {
@@ -160,7 +218,8 @@ export async function ingestCommittedEvent(
     };
 
     // 4. Load or create analytics blob
-    const windowId = 'default'; // Seasonal windows deferred
+    // Compute UTC calendar quarter from event timestamp
+    const windowId = getQuarterWindowIdFromTimestamp(event.tsMs);
     const blob = await loadOrCreateBlob(
       ctx,
       event.controlId,

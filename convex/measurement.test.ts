@@ -253,6 +253,86 @@ export const testScenario8_AllClocksProcessed = {
 };
 
 /**
+ * Test Scenario 9: UTC Quarter Windowing
+ * 
+ * Tests that committed events are correctly attributed to UTC calendar quarters.
+ * 
+ * Setup:
+ * 1. Create config and control
+ * 2. Set active model
+ * 
+ * Test Cases:
+ * 
+ * Case 9a: Quarter Boundary Detection (March 31 → April 1)
+ * - Commit event at 2024-03-31T23:59:59Z → should be in Q1 (2024-Q1)
+ * - Commit event at 2024-04-01T00:00:00Z → should be in Q2 (2024-Q2)
+ * - Verify windowId is correctly computed from UTC timestamp
+ * 
+ * Case 9b: All Quarters
+ * - Commit event in January → windowId = "YYYY-Q1"
+ * - Commit event in April → windowId = "YYYY-Q2"
+ * - Commit event in July → windowId = "YYYY-Q3"
+ * - Commit event in October → windowId = "YYYY-Q4"
+ * 
+ * Case 9c: UTC vs Local Time
+ * - Commit event at 2024-03-31T23:00:00-05:00 (EST, local time March 31)
+ *   → UTC is 2024-04-01T04:00:00Z → should be in Q2 (2024-Q2)
+ * - Verify quarter is always computed from UTC, not local time
+ * 
+ * Case 9d: Leap Year Handling
+ * - Commit event at 2024-02-29T12:00:00Z → should be in Q1 (2024-Q1)
+ * - Verify leap day is correctly handled
+ * 
+ * Case 9e: Year Boundary
+ * - Commit event at 2023-12-31T23:59:59Z → should be in Q4 (2023-Q4)
+ * - Commit event at 2024-01-01T00:00:00Z → should be in Q1 (2024-Q1)
+ * 
+ * Verify:
+ * - windowId format is "YYYY-Q{1-4}" (e.g., "2024-Q1")
+ * - Quarter boundaries are correctly detected in UTC
+ * - Analytics blobs are created/updated with correct windowId
+ * - Data is partitioned by quarter window
+ */
+export const testScenario9_UtcQuarterWindowing = {
+  description: 'UTC calendar quarter windowing for analytics blobs',
+  steps: [
+    'Create config and control',
+    'Test Q1 boundary (Jan-Mar)',
+    'Test Q2 boundary (Apr-Jun)',
+    'Test Q3 boundary (Jul-Sep)',
+    'Test Q4 boundary (Oct-Dec)',
+    'Test quarter boundary transitions (March 31 → April 1)',
+    'Test UTC vs local time (quarter always UTC-based)',
+    'Test leap year handling',
+    'Test year boundary transitions',
+    'Verify windowId format is "YYYY-Q{1-4}"',
+    'Verify analytics blobs partitioned by quarter',
+  ],
+  testCases: {
+    quarterBoundary: {
+      march31_235959: '2024-Q1',
+      april1_000000: '2024-Q2',
+    },
+    allQuarters: {
+      january: 'YYYY-Q1',
+      april: 'YYYY-Q2',
+      july: 'YYYY-Q3',
+      october: 'YYYY-Q4',
+    },
+    utcVsLocal: {
+      localMarch31_utcApril1: '2024-Q2', // Quarter based on UTC
+    },
+    leapYear: {
+      feb29: '2024-Q1',
+    },
+    yearBoundary: {
+      dec31: 'YYYY-Q4',
+      jan1: 'YYYY-Q1',
+    },
+  },
+};
+
+/**
  * Helper function to verify test results for dense arrays
  * 
  * This can be used in manual testing or automated test framework:
@@ -316,5 +396,14 @@ export const expectedResults = {
     allFiveClocksProcessed: true,
     holdMsForAllClocks: true,
     transCountsForAllClocks: true,
+  },
+  scenario9: {
+    quarterBoundaryCorrect: true,
+    allQuartersHandled: true,
+    utcBased: true,
+    leapYearHandled: true,
+    yearBoundaryCorrect: true,
+    windowIdFormatCorrect: true,
+    dataPartitionedByQuarter: true,
   },
 };

@@ -77,6 +77,62 @@ function getNumStates(definition: ControlDefinition): number {
 }
 
 /**
+ * Gets the UTC calendar quarter from a timestamp.
+ * 
+ * Quarter boundaries are defined in UTC calendar time:
+ * - Q1: January–March (months 0-2)
+ * - Q2: April–June (months 3-5)
+ * - Q3: July–September (months 6-8)
+ * - Q4: October–December (months 9-11)
+ * 
+ * @param tsMs - Timestamp in milliseconds since epoch
+ * @returns Object with year and quarter (1-4)
+ */
+function getUtcQuarterFromTimestamp(tsMs: number): { year: number; quarter: number } {
+  const date = new Date(tsMs);
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth(); // 0-11
+  
+  // Determine quarter based on month
+  let quarter: number;
+  if (month >= 0 && month <= 2) {
+    quarter = 1; // Q1: Jan-Mar
+  } else if (month >= 3 && month <= 5) {
+    quarter = 2; // Q2: Apr-Jun
+  } else if (month >= 6 && month <= 8) {
+    quarter = 3; // Q3: Jul-Sep
+  } else {
+    quarter = 4; // Q4: Oct-Dec
+  }
+  
+  return { year, quarter };
+}
+
+/**
+ * Formats a quarter window identifier as a string.
+ * 
+ * Format: "YYYY-Q{1-4}" (e.g., "2024-Q1")
+ * 
+ * @param year - UTC year
+ * @param quarter - Quarter number (1-4)
+ * @returns Formatted window identifier string
+ */
+function formatQuarterWindowId(year: number, quarter: number): string {
+  return `${year}-Q${quarter}`;
+}
+
+/**
+ * Gets the quarter window identifier from a timestamp.
+ * 
+ * @param tsMs - Timestamp in milliseconds since epoch
+ * @returns Quarter window identifier string (format: "YYYY-Q{1-4}")
+ */
+function getQuarterWindowIdFromTimestamp(tsMs: number): string {
+  const { year, quarter } = getUtcQuarterFromTimestamp(tsMs);
+  return formatQuarterWindowId(year, quarter);
+}
+
+/**
  * Assembles chunks back into a full dense array.
  * 
  * @param chunks - Array of chunks in order
@@ -165,15 +221,20 @@ async function loadChunks(
  * If modelId is provided, returns data for that model only.
  * If modelId is omitted, aggregates (sums) across all models.
  * 
+ * If windowId is provided, returns data for that quarter window only.
+ * If windowId is omitted, aggregates (sums) across all windowIds (for backward compatibility).
+ * 
  * @param ctx - Query context
  * @param controlId - Control identifier
  * @param modelId - Optional model identifier
+ * @param windowId - Optional quarter window identifier (format: "YYYY-Q{1-4}"). If omitted, aggregates across all windows.
  * @returns Aggregated dense array data
  */
 async function loadAnalyticsData(
   ctx: QueryCtx,
   controlId: string,
   modelId?: string,
+  windowId?: string,
 ): Promise<{
   numStates: number;
   data: number[];
@@ -192,12 +253,16 @@ async function loadAnalyticsData(
   const numStates = getNumStates(definition);
 
   // Query analytics blob metadata for this control
-  const windowId = 'default'; // Seasonal windows deferred
+  // If windowId is provided, filter by it; otherwise query all windowIds
   const allBlobs = await ctx.db
     .query('analyticsBlobs')
-    .withIndex('by_control_model_window', (q: any) =>
-      q.eq('controlId', controlId).eq('windowId', windowId),
-    )
+    .withIndex('by_control_model_window', (q: any) => {
+      const query = q.eq('controlId', controlId);
+      if (windowId !== undefined) {
+        return query.eq('windowId', windowId);
+      }
+      return query;
+    })
     .collect();
 
   // Filter by modelId if provided
@@ -313,11 +378,15 @@ export const getControlRuntime = query({
 /**
  * Get raw statistics (holdMs and transCounts) for a control.
  * 
- * Returns dense numerical arrays for all 5 clocks, with optional model filtering.
+ * Returns dense numerical arrays for all 5 clocks, with optional model and window filtering.
  * 
  * @param controlId - The control identifier
  * @param modelId - Optional model identifier. If provided, returns only that model's data.
  *                  If omitted, aggregates across all models.
+ * @param windowId - Optional quarter window identifier (format: "YYYY-Q{1-4}", e.g., "2024-Q1").
+ *                   If omitted, aggregates across all windows (for backward compatibility).
+ * @param tsMs - Optional timestamp in milliseconds. If provided, computes windowId from this timestamp.
+ *               If both windowId and tsMs are provided, windowId takes precedence.
  * @returns Dense arrays with metadata. Each clock has:
  *   - holdMs: array of N × 2016 values (one per state × bucket)
  *   - transCounts: array of N × (N-1) × 2016 values (one per transition × bucket)
@@ -327,13 +396,19 @@ export const getRawStats = query({
   args: v.object({
     controlId: v.string(),
     modelId: v.optional(v.string()),
+    windowId: v.optional(v.string()),
+    tsMs: v.optional(v.number()),
   }),
   handler: async (ctx: QueryCtx, args: any) => {
+    // Determine windowId: explicit parameter takes precedence, then compute from tsMs, otherwise undefined (aggregate all)
+    const windowId = args.windowId ?? (args.tsMs !== undefined ? getQuarterWindowIdFromTimestamp(args.tsMs) : undefined);
+    
     // Load aggregated analytics data
     const { numStates, data } = await loadAnalyticsData(
       ctx,
       args.controlId,
       args.modelId,
+      windowId,
     );
 
     // Extract data for each clock
@@ -406,6 +481,10 @@ export const getRawStats = query({
  * @param controlId - The control identifier
  * @param modelId - Optional model identifier. If provided, returns only that model's data.
  *                  If omitted, aggregates across all models.
+ * @param windowId - Optional quarter window identifier (format: "YYYY-Q{1-4}", e.g., "2024-Q1").
+ *                   If omitted, aggregates across all windows (for backward compatibility).
+ * @param tsMs - Optional timestamp in milliseconds. If provided, computes windowId from this timestamp.
+ *               If both windowId and tsMs are provided, windowId takes precedence.
  * @returns Time-of-day profile as dense arrays grouped by clock
  */
 export const getRawTimeOfDayProfile = query({
@@ -413,13 +492,19 @@ export const getRawTimeOfDayProfile = query({
   args: v.object({
     controlId: v.string(),
     modelId: v.optional(v.string()),
+    windowId: v.optional(v.string()),
+    tsMs: v.optional(v.number()),
   }),
   handler: async (ctx: QueryCtx, args: any) => {
+    // Determine windowId: explicit parameter takes precedence, then compute from tsMs, otherwise undefined (aggregate all)
+    const windowId = args.windowId ?? (args.tsMs !== undefined ? getQuarterWindowIdFromTimestamp(args.tsMs) : undefined);
+    
     // Load aggregated analytics data
     const { numStates, data } = await loadAnalyticsData(
       ctx,
       args.controlId,
       args.modelId,
+      windowId,
     );
 
     // BUCKETS_PER_DAY imported from core

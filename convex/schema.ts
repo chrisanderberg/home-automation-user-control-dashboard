@@ -165,7 +165,13 @@ export default defineSchema({
    * Key dimensions:
    * - controlId: which control
    * - modelId: which automation model
-   * - windowId: seasonal window identifier (default: "default" for now)
+   * - windowId: UTC calendar quarter identifier (format: "YYYY-Q{1-4}", e.g., "2024-Q1")
+   *   Quarter boundaries are defined in UTC calendar time:
+   *   - Q1: January–March
+   *   - Q2: April–June
+   *   - Q3: July–September
+   *   - Q4: October–December
+   *   Legacy data may use "default" for backward compatibility.
    * 
    * Data structure:
    * - numStates: number of discrete states (N) for this control
@@ -183,7 +189,7 @@ export default defineSchema({
   analyticsBlobs: defineTable({
     controlId: v.string(),
     modelId: v.string(), // ModelId
-    windowId: v.string(), // Seasonal window identifier (default: "default")
+    windowId: v.string(), // UTC calendar quarter identifier (format: "YYYY-Q{1-4}", e.g., "2024-Q1")
     numStates: v.number(), // Number of discrete states (N) for index calculations
     version: v.number(), // Schema version for future migrations (start at 1)
   })
@@ -202,7 +208,7 @@ export default defineSchema({
    * 
    * @param controlId - Control identifier (matches analyticsBlobs)
    * @param modelId - Model identifier (matches analyticsBlobs)
-   * @param windowId - Window identifier (matches analyticsBlobs)
+   * @param windowId - UTC calendar quarter identifier (format: "YYYY-Q{1-4}", e.g., "2024-Q1") (matches analyticsBlobs)
    * @param batchId - Unique batch identifier for atomic swap operations
    * @param chunkIndex - Zero-based index of this chunk (0, 1, 2, ...)
    * @param data - Array chunk containing a portion of the full dense array
@@ -210,7 +216,7 @@ export default defineSchema({
   analyticsBlobChunks: defineTable({
     controlId: v.string(),
     modelId: v.string(), // ModelId
-    windowId: v.string(), // Seasonal window identifier (default: "default")
+    windowId: v.string(), // UTC calendar quarter identifier (format: "YYYY-Q{1-4}", e.g., "2024-Q1")
     batchId: v.string(), // Unique batch identifier for atomic swap operations
     chunkIndex: v.number(), // Zero-based chunk index
     data: v.array(v.number()), // Chunk of the dense array
