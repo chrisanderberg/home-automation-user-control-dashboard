@@ -124,7 +124,7 @@ These must be stored in Convex config and/or passed through APIs:
   distribution under sparse/disconnected observations (TBD; configurable)
   - Example discrete form: \(P' = \alpha P + (1-\alpha)\mathbf{1}v^\top\)
 - Clock evaluation objective/metric (TBD in MANUAL)
-- Retention/rollover details for rolling quarters Q1–Q4 (TBD in MANUAL)
+- Retention/rollover details for rolling quarters Q1–Q4 (TBD in MANUAL). Note: Quarter definition (UTC calendar quarters) is now specified in MANUAL.md; only retention/rollover policy details remain TBD.
 
 Additionally, MANUAL describes CTMC construction conceptually but does not fix a
 specific estimator for generator rates. We must not guess silently.
@@ -510,7 +510,7 @@ Append-only, only for committed changes:
 ### Non-goals
 - No UI
 - No inference queries yet
-- No retention behavior (quarters) yet
+- No retention/rollover behavior (quarters) yet. Note: Quarter windowing structure (`windowId` in analyticsBlobs/analyticsBlobChunks) is implemented; retention policy is TBD.
 
 ### Acceptance criteria
 - `pnpm dev` starts Convex successfully with schema
@@ -655,18 +655,28 @@ In `convex/measurement.ts` (or similar):
   - compute containing bucket for `tsMs`
   - increment `transCounts` for `(fromState -> toState)` in that bucket
 
+4) Quarter windowing:
+- Compute `windowId` from event timestamp using UTC calendar quarter
+- Format: `"YYYY-Q{1-4}"` (e.g., `"2024-Q1"`)
+- Quarter boundaries are defined in UTC calendar time per MANUAL.md:
+  - Q1: January–March
+  - Q2: April–June
+  - Q3: July–September
+  - Q4: October–December
+- All analytics data is partitioned by this `windowId` in `analyticsBlobs` and `analyticsBlobChunks`
+
 Data integrity checks:
 - missing timestamps, negative intervals, missing active model, invalid state ⇒
   discard analytics update (do not partially apply)
 
 ### Inputs and Outputs
 - Inputs: previous commit state, current committed event, global config
-- Outputs: updated `holdMs` and `transCounts`
+- Outputs: updated analytics blobs partitioned by quarter `windowId`
 
 ### Non-goals
 - KDE smoothing
 - CTMC inference
-- Retention quarters
+- Retention/rollover policy (quarter partitioning structure is implemented; retention policy is TBD)
 
 ### Acceptance criteria
 - Automated test scenario (Convex test env or integration test):
@@ -704,17 +714,23 @@ In `convex/queries.ts` (or similar):
 - Queries:
   - `getControlDefinition(controlId)`
   - `getControlRuntime(controlId)`
-  - `getRawStats({ controlId, modelId? })`
+  - `getRawStats({ controlId, modelId?, windowId?, tsMs? })`
     - returns raw holdMs + transCounts, grouped by clock
     - behavior:
       - if `modelId` provided: stats for that model only
       - else: aggregated across all models for that control (sum across models)
-  - `getRawTimeOfDayProfile({ controlId, modelId? })`
+      - if `windowId` provided: filter by that quarter (format: "YYYY-Q{1-4}")
+      - if `tsMs` provided: compute quarter from timestamp and filter by that quarter
+      - if both `windowId` and `tsMs` provided: `windowId` takes precedence
+      - if neither provided: aggregate across all quarters (backward compatibility)
+  - `getRawTimeOfDayProfile({ controlId, modelId?, windowId?, tsMs? })`
     - derived from time-of-week buckets per clock (sum across 7 days)
+    - same quarter filtering behavior as `getRawStats`
 
 Important:
 - These queries do not accept `clockId`.
 - Response always includes all clocks keyed by `clockId`.
+- Quarter filtering is optional; if omitted, queries aggregate across all quarters for backward compatibility with legacy data.
 
 Suggested response shape (illustrative; exact JSON can vary):
 - `{ clocks: { local: {...}, utc: {...}, meanSolar: {...}, apparentSolar: {...}, unequalHours: {...} } }`
@@ -901,13 +917,15 @@ policy that MANUAL.md marks as TBD.
 
 ### Acceptance criteria
 - Tests verifying:
-  - events/aggregates land in correct quarter
-  - rollover moves new data to a new quarterKey
-  - queries can filter by quarterKey
+  - quarter assignment at boundaries (already verified in Milestone 8)
+  - rollover moves new data to a new `windowId`
+  - queries can filter by `windowId` (already verified in Milestone 9)
+  - retention policy correctly drops/archives old quarters per config
 
 ### Edge cases
 - Covered:
-  - quarter boundary timestamps
+  - quarter boundary timestamps (already handled in Milestone 8)
+  - UTC calendar quarter boundaries (variable-length quarters, leap years)
 - Deferred:
   - long-term migration of old data layouts
 

@@ -105,7 +105,7 @@ Global hard rules (apply to every milestone):
   - KDE bandwidth defaults
   - slider boundary rounding (0.25/0.5/0.75)
   - CTMC rate estimator
-  - rolling quarters retention/rollover
+  - rolling quarters retention/rollover (quarter definition is now specified; only retention/rollover policy is TBD)
   - “best clock” evaluation metric
 - Do NOT add new abstractions not in the plan.
 - Analytics queries must NOT accept `clockId` input and must ALWAYS return all
@@ -458,6 +458,11 @@ STOP if:
   - state = `prevCommittedDiscreteState`
   - split per clock, add to `holdMs`
   - if initiator is user, increment `transCounts` per clock at event bucket
+- Quarter windowing:
+  - Compute `windowId` from event timestamp using UTC calendar quarter
+  - Format: `"YYYY-Q{1-4}"` (e.g., `"2024-Q1"`)
+  - Quarter boundaries: Q1 (Jan-Mar), Q2 (Apr-Jun), Q3 (Jul-Sep), Q4 (Oct-Dec), all in UTC calendar time
+  - All analytics data partitioned by this `windowId` in `analyticsBlobs` and `analyticsBlobChunks`
 - Integrity:
   - if timestamps missing/invalid, negative interval, invalid states, missing
     model attribution → discard update (no partial ingest)
@@ -512,8 +517,8 @@ STOP if:
 - Implement queries:
   - `getControlDefinition`
   - `getControlRuntime`
-  - `getRawStats({ controlId, modelId? })`
-  - `getRawTimeOfDayProfile({ controlId, modelId? })`
+  - `getRawStats({ controlId, modelId?, windowId?, tsMs? })`
+  - `getRawTimeOfDayProfile({ controlId, modelId?, windowId?, tsMs? })`
 - Enforce query contract:
   - NO `clockId` input parameter
   - response ALWAYS keyed by all clocks:
@@ -521,6 +526,11 @@ STOP if:
 - Implement aggregation behavior:
   - if `modelId` provided: return that model only
   - else: sum across models
+- Implement quarter filtering behavior:
+  - if `windowId` provided: filter by that quarter (format: "YYYY-Q{1-4}")
+  - if `tsMs` provided: compute quarter from timestamp and filter by that quarter
+  - if both `windowId` and `tsMs` provided: `windowId` takes precedence
+  - if neither provided: aggregate across all quarters (backward compatibility)
 
 DO NOT:
 - Add optional clock filtering “for debugging” (explicitly forbidden).
@@ -649,7 +659,7 @@ STOP if:
 - You cannot implement quarters without hardcoding rollover rules.
 
 ### 2) Implementation checklist
-- Add `quarterKey` partitioning to relevant tables/events per plan.
+- Note: Quarter partitioning already exists via `windowId` field (format: "YYYY-Q{1-4}") implemented in Milestone 8.
 - Implement config fields controlling:
   - retention count
   - rollover triggers/timing (TBD but configurable)
@@ -665,9 +675,10 @@ Run:
 - `pnpm test`
 
 Add/verify tests:
-- Quarter assignment at boundaries.
-- Query filtering by quarterKey.
+- Quarter assignment at boundaries (already verified in Milestone 8).
+- Query filtering by `windowId` (already verified in Milestone 9).
 - Rollover creates new quarter partitions.
+- Retention policy correctly drops/archives old quarters per config.
 
 Run:
 - `pnpm dev` and verify maintenance job works.
