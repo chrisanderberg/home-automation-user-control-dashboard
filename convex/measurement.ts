@@ -347,9 +347,23 @@ async function loadChunks(
   // Find the latest batchId (most recent batch)
   // batchId format: "timestamp-random", so extract timestamp for comparison
   const batchIds = new Set(allChunks.map((chunk) => chunk.batchId));
-  const latestBatchId = Array.from(batchIds).reduce((latest, current) => {
-    const currentTs = parseInt(current.split('-')[0], 10);
-    const latestTs = parseInt(latest.split('-')[0], 10);
+  
+  // Helper function to safely parse timestamp from batchId
+  const parseTimestamp = (batchId: string): number => {
+    const parts = batchId.split('-');
+    if (parts.length === 0) return -Infinity;
+    const timestamp = Number.parseInt(parts[0], 10);
+    return Number.isNaN(timestamp) ? -Infinity : timestamp;
+  };
+  
+  const batchIdsArray = Array.from(batchIds);
+  if (batchIdsArray.length === 0) {
+    return null;
+  }
+  
+  const latestBatchId = batchIdsArray.reduce((latest, current) => {
+    const currentTs = parseTimestamp(current);
+    const latestTs = parseTimestamp(latest);
     return currentTs > latestTs ? current : latest;
   });
 
