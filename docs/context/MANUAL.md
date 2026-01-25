@@ -14,7 +14,7 @@ How to use this file (for LLMs and humans):
 Scope:
 - Project-independent concepts only (controls, models/responsibility, clocks,
   bucketing, counting rules, dense data layout, KDE/CTMC interpretation, data
-  lifecycle intent).
+  lifecycle intent, conceptual persistence model).
 - No framework-, database-, transport-, or deployment-specific APIs.
 
 Output expectations when implementing from this spec:
@@ -41,7 +41,7 @@ aggregation + analytics without a custom dashboard UI).
 ## System decomposition
 
 ### Control / Interaction Layer (what the system controls)
-- Defines controls as discrete state variables the user can inspect and change.
+- Defines controls as discrete state variables that can be inspected and changed.
 - Defines automation models that change control state over time.
 - Defines the notion of “user-initiated” vs “automated” state changes.
 - Produces state changes that become inputs to aggregation.
@@ -99,8 +99,15 @@ aggregation + analytics without a custom dashboard UI).
   or other integrity failures), affected data is discarded rather than ingested.
 
 ### Data lifecycle intent
-- A seasonal retention scheme is used to preserve annual structure:
-  rolling quarters Q1–Q4 (retention/rollover details: TBD).
+- Seasonal variation is preserved using rolling quarters Q1–Q4 (retention/rollover
+  details: TBD).
+- Quarter windows are UTC-defined calendar quarters:
+  - Q1: January–March
+  - Q2: April–June
+  - Q3: July–September
+  - Q4: October–December
+  Quarter boundaries are defined in UTC calendar time (variable-length quarters
+  are expected).
 
 ---
 
@@ -111,7 +118,7 @@ aggregation + analytics without a custom dashboard UI).
 Controls represent system state that can be set automatically by automation
 models and can also be changed directly by the user through a UI or other client.
 
-Controls are limited to settings the user can explicitly inspect and change,
+Controls are limited to settings that can be explicitly inspected and changed,
 as opposed to implicit signals such as motion detection.
 
 ### Control categories
@@ -165,6 +172,30 @@ Each control can be driven by one of multiple automation models over time.
 ---
 
 # Part II — Aggregation Layer
+
+## Conceptual persistence model (implementation-agnostic)
+
+This system can be implemented using many persistence technologies. Regardless of
+storage choice, two conceptual data entities must exist.
+
+### Control metadata entity (conceptual)
+Stores the metadata needed to interpret a control’s states:
+
+- controlId
+- control type (discrete/radio vs slider)
+- numStates (2..10; slider typically 6)
+- optional state labels (up to 10)
+
+### Aggregated sufficient statistics entity (conceptual)
+Stores dense aggregated sufficient statistics partitioned by seasonal windows.
+
+Conceptual key:
+- controlId
+- model identifier
+- quarter window key (UTC calendar quarter)
+- payload: dense numeric data (see “Dense aggregated data layout”)
+
+This entity represents sufficient statistics, not raw events.
 
 ## The five clocks
 
@@ -349,6 +380,8 @@ Values are stored in this order:
    - (N-1 → 0), (N-1 → 1), ..., (N-1 → N-2)
 
 Self-transitions (i → i) are not stored.
+This matches CTMC construction where diagonal terms are derived rather than
+directly counted.
 
 Total number of stored values:
 - holding groups: N × G
@@ -481,6 +514,25 @@ best correlates with inferred user preference. Evaluation objective/metric is TB
 If something goes wrong (e.g., missing/invalid timestamps, broken attribution, or
 other integrity failures), affected data is discarded rather than ingested into
 aggregates.
+
+## Quarter windows (UTC calendar quarters)
+
+Quarter windows are defined as UTC calendar quarters:
+
+- Q1: January–March
+- Q2: April–June
+- Q3: July–September
+- Q4: October–December
+
+Quarter windows are variable-length and may include leap days. This is expected.
+
+Implementations may represent quarter windows as:
+- `(utcYear, quarterNumber)` pairs, or
+- a single integer `quarterIndex`, where:
+  - `quarterIndex = (utcYear - 1970) * 4 + (quarterNumber - 1)`
+
+The quarter window definition is independent of the five clocks; clocks are used
+for time-of-week bucketing within a selected window.
 
 ## Accumulation model (rolling quarters)
 Some clock effects require a full year to observe (e.g., mean vs apparent solar
