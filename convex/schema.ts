@@ -151,10 +151,11 @@ export default defineSchema({
     .index('by_controlId_tsMs', ['controlId', 'tsMs']),
 
   /**
-   * Dense analytics data blobs.
+   * Analytics blob metadata (without the large data array).
    * 
-   * Stores aggregated sufficient statistics as dense numerical arrays per
-   * (control, model, window) combination.
+   * Stores metadata for aggregated sufficient statistics per (control, model, window).
+   * The actual data is stored in analyticsBlobChunks to avoid exceeding Convex's 1 MiB
+   * document limit.
    * 
    * Array layout (per MANUAL.md):
    * - Total size: N² × G where N = numStates, G = 10080 (2016 buckets × 5 clocks)
@@ -168,7 +169,6 @@ export default defineSchema({
    * 
    * Data structure:
    * - numStates: number of discrete states (N) for this control
-   * - data: dense array of N² × G numbers
    * - version: schema version for future migrations
    * 
    * Clock ordering (canonical):
@@ -185,8 +185,31 @@ export default defineSchema({
     modelId: v.string(), // ModelId
     windowId: v.string(), // Seasonal window identifier (default: "default")
     numStates: v.number(), // Number of discrete states (N) for index calculations
-    data: v.array(v.number()), // Dense array of N² × G values
     version: v.number(), // Schema version for future migrations (start at 1)
   })
     .index('by_control_model_window', ['controlId', 'modelId', 'windowId']),
+
+  /**
+   * Chunks of analytics blob data.
+   * 
+   * Splits large dense arrays into chunks to avoid exceeding Convex's 1 MiB document limit.
+   * Each chunk contains a portion of the full array data.
+   * 
+   * Chunks are ordered by chunkIndex and must be assembled to reconstruct the full array.
+   * 
+   * @param controlId - Control identifier (matches analyticsBlobs)
+   * @param modelId - Model identifier (matches analyticsBlobs)
+   * @param windowId - Window identifier (matches analyticsBlobs)
+   * @param chunkIndex - Zero-based index of this chunk (0, 1, 2, ...)
+   * @param data - Array chunk containing a portion of the full dense array
+   */
+  analyticsBlobChunks: defineTable({
+    controlId: v.string(),
+    modelId: v.string(), // ModelId
+    windowId: v.string(), // Seasonal window identifier (default: "default")
+    chunkIndex: v.number(), // Zero-based chunk index
+    data: v.array(v.number()), // Chunk of the dense array
+  })
+    .index('by_control_model_window', ['controlId', 'modelId', 'windowId'])
+    .index('by_control_model_window_chunk', ['controlId', 'modelId', 'windowId', 'chunkIndex']),
 });

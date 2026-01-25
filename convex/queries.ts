@@ -28,6 +28,12 @@ import {
 type QueryCtx = GenericQueryCtx<DataModel>;
 
 /**
+ * Chunk size for splitting large arrays to avoid Convex's 1 MiB document limit.
+ * Must match the value in measurement.ts.
+ */
+const CHUNK_SIZE = 100000;
+
+/**
  * All five clock identifiers in canonical order (matches MANUAL.md).
  */
 const ALL_CLOCKS: ClockId[] = [
@@ -71,6 +77,59 @@ function getNumStates(definition: ControlDefinition): number {
 }
 
 /**
+ * Assembles chunks back into a full dense array.
+ * 
+ * @param chunks - Array of chunks in order
+ * @returns Reconstructed full array
+ */
+function assembleFromChunks(chunks: number[][]): number[] {
+  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const result = new Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    for (let i = 0; i < chunk.length; i++) {
+      result[offset + i] = chunk[i];
+    }
+    offset += chunk.length;
+  }
+  return result;
+}
+
+/**
+ * Loads chunks for a blob from the database.
+ * 
+ * @param ctx - Query context
+ * @param controlId - Control identifier
+ * @param modelId - Model identifier
+ * @param windowId - Window identifier
+ * @returns Array of chunks in order, or null if not found
+ */
+async function loadChunks(
+  ctx: QueryCtx,
+  controlId: string,
+  modelId: string,
+  windowId: string,
+): Promise<number[][] | null> {
+  const chunks = await ctx.db
+    .query('analyticsBlobChunks')
+    .withIndex('by_control_model_window', (q: any) =>
+      q
+        .eq('controlId', controlId)
+        .eq('modelId', modelId)
+        .eq('windowId', windowId),
+    )
+    .collect();
+
+  if (chunks.length === 0) {
+    return null;
+  }
+
+  // Sort by chunkIndex to ensure correct order
+  chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+  return chunks.map((chunk) => chunk.data);
+}
+
+/**
  * Load and aggregate analytics blobs for a control.
  * 
  * If modelId is provided, returns data for that model only.
@@ -102,7 +161,7 @@ async function loadAnalyticsData(
   const definition = control.definition as ControlDefinition;
   const numStates = getNumStates(definition);
 
-  // Query analytics blobs for this control
+  // Query analytics blob metadata for this control
   const windowId = 'default'; // Seasonal windows deferred
   const allBlobs = await ctx.db
     .query('analyticsBlobs')
@@ -134,14 +193,25 @@ async function loadAnalyticsData(
       );
       continue;
     }
-    if (blob.data.length !== aggregatedData.length) {
+
+    // Load chunks for this blob
+    const chunks = await loadChunks(ctx, blob.controlId, blob.modelId, blob.windowId);
+    if (chunks === null) {
       console.warn(
-        `[loadAnalyticsData] Blob size mismatch: expected ${aggregatedData.length}, got ${blob.data.length}`,
+        `[loadAnalyticsData] No chunks found for controlId: ${controlId}, modelId: ${blob.modelId}`,
+      );
+      continue;
+    }
+
+    const blobData = assembleFromChunks(chunks);
+    if (blobData.length !== aggregatedData.length) {
+      console.warn(
+        `[loadAnalyticsData] Blob size mismatch: expected ${aggregatedData.length}, got ${blobData.length}`,
       );
       continue;
     }
     for (let i = 0; i < aggregatedData.length; i++) {
-      aggregatedData[i] += blob.data[i] || 0;
+      aggregatedData[i] += blobData[i] || 0;
     }
   }
 

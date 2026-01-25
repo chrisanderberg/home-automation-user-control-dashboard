@@ -25,7 +25,7 @@ describe('bucketIdToDayAndMinutes', () => {
     });
   });
 
-  it('should convert Wednesday 12:00 (bucket 864)', () => {
+  it('should convert Wednesday 12:00 (bucket 720)', () => {
     // Wednesday is day 2, 12:00 = 720 minutes = bucket 144 in day
     // bucketId = 2 * 288 + 144 = 720
     // Actually, 12:00 = 720 minutes = bucket 144 (720 / 5 = 144)

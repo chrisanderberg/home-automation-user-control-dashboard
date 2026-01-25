@@ -32,7 +32,7 @@ export function mapUnequalHoursToBucket(
   // Get next sunrise (for night period calculation)
   const nextDay = new Date(date);
   nextDay.setUTCDate(nextDay.getUTCDate() + 1);
-    const nextTimes = getTimes(nextDay, config.latitude, config.longitude);
+  const nextTimes = getTimes(nextDay, config.latitude, config.longitude);
   const nextSunriseMs = nextTimes.sunrise?.getTime();
 
   if (!nextSunriseMs) {

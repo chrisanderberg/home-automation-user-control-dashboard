@@ -30,6 +30,12 @@ import {
 type MutationCtx = GenericMutationCtx<DataModel>;
 
 /**
+ * Chunk size for splitting large arrays to avoid Convex's 1 MiB document limit.
+ * Each number is 8 bytes, so 100,000 numbers = 800,000 bytes (~0.76 MiB), safely under 1 MiB.
+ */
+const CHUNK_SIZE = 100000;
+
+/**
  * All five clock identifiers that must be processed.
  */
 const ALL_CLOCKS: ClockId[] = [
@@ -211,8 +217,15 @@ export async function ingestCommittedEvent(
       }
     }
 
-    // 7. Save updated blob
-    await ctx.db.patch(blob._id, { data: blob.data });
+    // 7. Save updated blob (split into chunks)
+    const chunks = splitIntoChunks(blob.data);
+    await saveChunks(
+      ctx,
+      event.controlId,
+      event.activeModelId,
+      windowId,
+      chunks,
+    );
   } catch (error) {
     // Log error but don't fail the mutation
     console.error(
@@ -266,6 +279,116 @@ function validateIntegrity(
 }
 
 /**
+ * Splits a dense array into chunks.
+ * 
+ * @param data - Full dense array
+ * @returns Array of chunks, each containing up to CHUNK_SIZE elements
+ */
+function splitIntoChunks(data: number[]): number[][] {
+  const chunks: number[][] = [];
+  for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+    chunks.push(data.slice(i, i + CHUNK_SIZE));
+  }
+  return chunks;
+}
+
+/**
+ * Assembles chunks back into a full dense array.
+ * 
+ * @param chunks - Array of chunks in order
+ * @returns Reconstructed full array
+ */
+function assembleFromChunks(chunks: number[][]): number[] {
+  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const result = new Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    for (let i = 0; i < chunk.length; i++) {
+      result[offset + i] = chunk[i];
+    }
+    offset += chunk.length;
+  }
+  return result;
+}
+
+/**
+ * Loads chunks for a blob from the database.
+ * 
+ * @param ctx - Convex mutation context
+ * @param controlId - Control identifier
+ * @param modelId - Model identifier
+ * @param windowId - Window identifier
+ * @returns Array of chunks in order, or null if not found
+ */
+async function loadChunks(
+  ctx: MutationCtx,
+  controlId: string,
+  modelId: string,
+  windowId: string,
+): Promise<number[][] | null> {
+  const chunks = await ctx.db
+    .query('analyticsBlobChunks')
+    .withIndex('by_control_model_window', (q: any) =>
+      q
+        .eq('controlId', controlId)
+        .eq('modelId', modelId)
+        .eq('windowId', windowId),
+    )
+    .collect();
+
+  if (chunks.length === 0) {
+    return null;
+  }
+
+  // Sort by chunkIndex to ensure correct order
+  chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+  return chunks.map((chunk) => chunk.data);
+}
+
+/**
+ * Saves chunks to the database, replacing any existing chunks.
+ * 
+ * @param ctx - Convex mutation context
+ * @param controlId - Control identifier
+ * @param modelId - Model identifier
+ * @param windowId - Window identifier
+ * @param chunks - Array of chunks to save
+ */
+async function saveChunks(
+  ctx: MutationCtx,
+  controlId: string,
+  modelId: string,
+  windowId: string,
+  chunks: number[][],
+): Promise<void> {
+  // Delete existing chunks
+  const existingChunks = await ctx.db
+    .query('analyticsBlobChunks')
+    .withIndex('by_control_model_window', (q: any) =>
+      q
+        .eq('controlId', controlId)
+        .eq('modelId', modelId)
+        .eq('windowId', windowId),
+    )
+    .collect();
+
+  for (const chunk of existingChunks) {
+    await ctx.db.delete(chunk._id);
+  }
+
+  // Insert new chunks
+  for (let i = 0; i < chunks.length; i++) {
+    await ctx.db.insert('analyticsBlobChunks', {
+      controlId,
+      modelId,
+      windowId,
+      chunkIndex: i,
+      data: chunks[i],
+    });
+  }
+}
+
+/**
  * Loads or creates an analytics blob for the given (control, model, window).
  * 
  * @param ctx - Convex mutation context
@@ -273,7 +396,7 @@ function validateIntegrity(
  * @param modelId - Model identifier
  * @param windowId - Window identifier (default: "default")
  * @param numStates - Number of discrete states (N)
- * @returns Analytics blob with dense array
+ * @returns Analytics blob metadata ID and dense array
  */
 async function loadOrCreateBlob(
   ctx: MutationCtx,
@@ -285,7 +408,7 @@ async function loadOrCreateBlob(
   _id: any;
   data: number[];
 }> {
-  // Query for existing blob
+  // Query for existing blob metadata
   const existing = await ctx.db
     .query('analyticsBlobs')
     .withIndex('by_control_model_window', (q: any) =>
@@ -297,17 +420,31 @@ async function loadOrCreateBlob(
     .first();
 
   if (existing) {
+    // Load chunks and assemble
+    const chunks = await loadChunks(ctx, controlId, modelId, windowId);
+    if (chunks === null) {
+      // Metadata exists but no chunks - create new chunks
+      const newData = createDenseArray(numStates);
+      const newChunks = splitIntoChunks(newData);
+      await saveChunks(ctx, controlId, modelId, windowId, newChunks);
+      return { _id: existing._id, data: newData };
+    }
+
+    const data = assembleFromChunks(chunks);
+    
     // Validate array size matches expected
-    if (!validateArraySize(existing.data, numStates)) {
+    if (!validateArraySize(data, numStates)) {
       console.error(
-        `[loadOrCreateBlob] Array size mismatch for controlId: ${controlId}, modelId: ${modelId}. Expected size for ${numStates} states, got ${existing.data.length}`,
+        `[loadOrCreateBlob] Array size mismatch for controlId: ${controlId}, modelId: ${modelId}. Expected size for ${numStates} states, got ${data.length}`,
       );
       // Create new array with correct size (data migration scenario)
       const newData = createDenseArray(numStates);
-      await ctx.db.patch(existing._id, { data: newData, numStates, version: 1 });
+      const newChunks = splitIntoChunks(newData);
+      await saveChunks(ctx, controlId, modelId, windowId, newChunks);
+      await ctx.db.patch(existing._id, { numStates, version: 1 });
       return { _id: existing._id, data: newData };
     }
-    return { _id: existing._id, data: existing.data };
+    return { _id: existing._id, data };
   } else {
     // Create new blob initialized to zeros
     const data = createDenseArray(numStates);
@@ -316,9 +453,10 @@ async function loadOrCreateBlob(
       modelId,
       windowId,
       numStates,
-      data,
       version: 1,
     });
+    const chunks = splitIntoChunks(data);
+    await saveChunks(ctx, controlId, modelId, windowId, chunks);
     return { _id: newBlob, data };
   }
 }
